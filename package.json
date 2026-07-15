@@ -1,0 +1,20 @@
+{
+  "name": "obsidian-wayfinder",
+  "version": "0.1.0",
+  "description": "Visualize wayfinder maps from GitHub issues inside Obsidian",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "deploy": "npm run build && ./deploy.sh",
+    "smoke": "esbuild test/smoke.ts --bundle --format=esm --platform=node --outfile=test/smoke.bundle.mjs && node test/smoke.bundle.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "esbuild": "^0.21.0",
+    "obsidian": "^1.5.7",
+    "typescript": "^5.4.0"
+  },
+  "license": "MIT"
+}
