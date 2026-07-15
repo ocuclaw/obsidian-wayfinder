@@ -68,7 +68,12 @@
   border-radius: 8px; padding: 0.55rem 0.7rem; cursor: pointer;
   max-width: 560px;
 }
-.wf-chevron { color: var(--text-muted); padding-top: 0.1rem; }
+.wf-chevron {
+  color: var(--text-muted); cursor: pointer;
+  padding: 0.25rem; margin: -0.15rem; border-radius: 4px;
+  display: inline-flex; align-items: center;
+}
+.wf-chevron:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
 .wf-chevron svg { width: 14px; height: 14px; }
 .wf-mapcard-main { flex: 1; display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
 .wf-map-title { font-weight: 600; font-size: 0.95em; }

@@ -11,7 +11,8 @@ import {
 export const VIEW_TYPE_WAYFINDER = "wayfinder-view";
 
 export class WayfinderView extends ItemView {
-  private expandedClosedMaps = new Set<number>();
+  /** Per-map collapse override; default is expanded for open maps, collapsed for closed. */
+  private collapsedOverride = new Map<number, boolean>();
   private hoverCard: HTMLElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
 
@@ -134,17 +135,19 @@ export class WayfinderView extends ItemView {
 
   private renderMap(root: HTMLElement, map: MapTree): void {
     const isClosed = map.issue.state === "closed";
-    const expanded = !isClosed || this.expandedClosedMaps.has(map.issue.number);
+    const collapsed = this.collapsedOverride.get(map.issue.number) ?? isClosed;
+    const expanded = !collapsed;
     const section = root.createDiv({ cls: "wf-map-section" });
 
     const head = section.createDiv({ cls: "wf-mapcard" });
-    const chevron = head.createDiv({ cls: "wf-chevron" });
+    const chevron = head.createDiv({
+      cls: "wf-chevron",
+      attr: { "aria-label": expanded ? "Collapse map" : "Expand map" },
+    });
     setIcon(chevron, expanded ? "chevron-down" : "chevron-right");
     chevron.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (!isClosed) return; // open maps stay expanded
-      if (expanded) this.expandedClosedMaps.delete(map.issue.number);
-      else this.expandedClosedMaps.add(map.issue.number);
+      this.collapsedOverride.set(map.issue.number, expanded);
       this.render();
     });
 
