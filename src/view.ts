@@ -60,13 +60,17 @@ export class WayfinderView extends ItemView {
     const snapshot = this.plugin.snapshot;
     if (!snapshot) {
       const empty = root.createDiv({ cls: "wf-empty" });
+      if (this.plugin.syncing) {
+        empty.setText("Syncing…");
+        return;
+      }
       if (this.plugin.lastError) {
         empty.createDiv({ text: this.plugin.lastError, cls: "wf-error" });
-      } else if (this.plugin.syncing) {
-        empty.setText("Syncing…");
       } else {
-        empty.setText("No data yet. Configure Settings → Wayfinder, then sync.");
+        empty.createDiv({ text: "No data yet. Configure Settings → Wayfinder, then sync." });
       }
+      const btn = empty.createEl("button", { text: "Sync now", cls: "wf-sync-now" });
+      btn.addEventListener("click", () => void this.plugin.sync(true));
       return;
     }
 

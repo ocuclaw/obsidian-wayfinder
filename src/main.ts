@@ -80,8 +80,16 @@ export default class WayfinderPlugin extends Plugin {
     }
   }
 
+  private settingsSyncTimer: number | null = null;
+
+  /** Persist settings and, once edits settle, try a sync with the new values. */
   async saveSettings(): Promise<void> {
     await this.persist();
+    if (this.settingsSyncTimer !== null) window.clearTimeout(this.settingsSyncTimer);
+    this.settingsSyncTimer = window.setTimeout(() => {
+      this.settingsSyncTimer = null;
+      if (this.settings.token && this.settings.repo.includes("/")) void this.sync(true);
+    }, 800);
   }
 
   private async persist(): Promise<void> {

@@ -15,7 +15,8 @@
 .wf-t-task { --tc: var(--wf-task, #f85149); }
 .wf-t-map { --tc: var(--wf-map, #a371f7); }
 
-.wf-empty { color: var(--text-muted); padding: 2rem 0.5rem; }
+.wf-empty { color: var(--text-muted); padding: 2rem 0.5rem; display: flex; flex-direction: column; gap: 0.8rem; align-items: flex-start; }
+.wf-sync-now { cursor: pointer; }
 .wf-error { color: var(--text-error); font-size: 0.85em; margin: 0.4rem 0; }
 
 /* ── tally bar ── */
