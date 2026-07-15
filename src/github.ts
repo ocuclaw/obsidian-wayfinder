@@ -72,6 +72,22 @@ export class GitHubClient {
     if (res.status !== 200) return [];
     return (res.json as { number: number }[]).map((i) => i.number);
   }
+
+  async comments(issueNumber: number): Promise<IssueComment[]> {
+    const res = await this.get(`/issues/${issueNumber}/comments?per_page=100`);
+    if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
+    return (res.json as Record<string, unknown>[]).map((c) => ({
+      author: (c.user as { login: string } | null)?.login ?? "unknown",
+      createdAt: c.created_at as string,
+      body: (c.body as string | null) ?? "",
+    }));
+  }
+}
+
+export interface IssueComment {
+  author: string;
+  createdAt: string;
+  body: string;
 }
 
 /**

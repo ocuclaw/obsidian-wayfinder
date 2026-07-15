@@ -1,5 +1,5 @@
 import { Events, Notice, Plugin, WorkspaceLeaf, requestUrl } from "obsidian";
-import { GitHubClient, fetchSnapshot, type Http } from "./github";
+import { GitHubClient, fetchSnapshot, type Http, type IssueComment } from "./github";
 import type { Snapshot } from "./model";
 import { DEFAULT_SETTINGS, WayfinderSettingTab, type WayfinderSettings } from "./settings";
 import { VIEW_TYPE_WAYFINDER, WayfinderView } from "./view";
@@ -24,6 +24,18 @@ export default class WayfinderPlugin extends Plugin {
     () => ({ token: this.settings.token, repo: this.settings.repo }),
     obsidianHttp,
   );
+
+  fetchComments(issueNumber: number): Promise<IssueComment[]> {
+    return this.github.comments(issueNumber);
+  }
+
+  copyCommand(url: string): void {
+    const text = this.settings.copyTemplate.replace("{url}", url);
+    void navigator.clipboard.writeText(text).then(
+      () => new Notice(`Copied: ${text}`),
+      () => new Notice("Copy failed — clipboard unavailable"),
+    );
+  }
 
   async onload(): Promise<void> {
     const data = ((await this.loadData()) ?? {}) as Partial<PersistedData>;

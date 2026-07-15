@@ -1,5 +1,6 @@
-import { ItemView, Notice, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, Platform, WorkspaceLeaf, setIcon } from "obsidian";
 import type WayfinderPlugin from "./main";
+import { TicketModal } from "./modal";
 import {
   buildModel,
   descriptionOf,
@@ -10,9 +11,23 @@ import {
 
 export const VIEW_TYPE_WAYFINDER = "wayfinder-view";
 
+type ViewMode = "tree" | "list";
+const MODE_KEY = "wayfinder-view-mode";
+
 export class WayfinderView extends ItemView {
   /** Per-map collapse override; default is expanded for open maps, collapsed for closed. */
   private collapsedOverride = new Map<number, boolean>();
+
+  /** Per-device (localStorage, not synced): phones default to list, desktops to tree. */
+  private get mode(): ViewMode {
+    const stored = window.localStorage.getItem(MODE_KEY);
+    if (stored === "tree" || stored === "list") return stored;
+    return Platform.isMobile ? "list" : "tree";
+  }
+
+  private set mode(m: ViewMode) {
+    window.localStorage.setItem(MODE_KEY, m);
+  }
   private hoverCard: HTMLElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
 
@@ -106,6 +121,15 @@ export class WayfinderView extends ItemView {
     right.createSpan({
       text: `${model.totalIssues} issues · ${model.totalOpen} open · ${syncedAgo}`,
     });
+    const modeBtn = right.createEl("button", {
+      cls: "wf-refresh",
+      attr: { "aria-label": this.mode === "tree" ? "Switch to list view" : "Switch to tree view" },
+    });
+    setIcon(modeBtn, this.mode === "tree" ? "list" : "git-fork");
+    modeBtn.addEventListener("click", () => {
+      this.mode = this.mode === "tree" ? "list" : "tree";
+      this.render();
+    });
     const refresh = right.createEl("button", { cls: "wf-refresh", attr: { "aria-label": "Refresh now" } });
     setIcon(refresh, "refresh-cw");
     refresh.addEventListener("click", () => void this.plugin.sync(true));
@@ -127,7 +151,7 @@ export class WayfinderView extends ItemView {
         cls: "wf-orphan-why",
         text: t.parent === null ? "no “Part of #N” line" : `parent #${t.parent} is not a map`,
       });
-      row.addEventListener("click", () => this.copyCommand(t.issue.html_url));
+      row.addEventListener("click", () => this.plugin.copyCommand(t.issue.html_url));
     }
   }
 
@@ -165,20 +189,18 @@ export class WayfinderView extends ItemView {
       attr: { style: `width:${map.total ? Math.round((map.resolved / map.total) * 100) : 0}%` },
     });
 
-    const openLink = head.createEl("a", {
-      cls: "wf-ext",
-      href: map.issue.html_url,
-      attr: { "aria-label": "Open on GitHub" },
-    });
-    setIcon(openLink, "external-link");
-    openLink.addEventListener("click", (e) => e.stopPropagation());
-
-    head.addEventListener("click", () => this.copyCommand(map.issue.html_url));
+    this.addIconActions(head, map.issue.html_url);
+    head.addEventListener("click", () => new TicketModal(this.app, this.plugin, null, map).open());
     this.attachHover(head, null, map);
 
     if (!expanded) return;
     if (map.tickets.length === 0) {
       section.createDiv({ cls: "wf-no-tickets", text: "No tickets attached yet." });
+      return;
+    }
+
+    if (this.mode === "list") {
+      this.renderList(section, map);
       return;
     }
 
@@ -196,8 +218,57 @@ export class WayfinderView extends ItemView {
     this.resizeObserver?.observe(tree);
   }
 
-  private renderTicket(layerEl: HTMLElement, t: Ticket, map: MapTree): void {
-    const card = layerEl.createDiv({ cls: `wf-ticket wf-t-${t.type}` });
+  /** Compact mode: full-width rows grouped by actionability. */
+  private renderList(section: HTMLElement, map: MapTree): void {
+    const groups: { label: string; tickets: Ticket[] }[] = [
+      { label: "Takeable", tickets: map.tickets.filter((t) => t.frontier) },
+      {
+        label: "Claimed",
+        tickets: map.tickets.filter(
+          (t) => t.issue.state === "open" && !t.frontier && t.openBlockers.length === 0,
+        ),
+      },
+      {
+        label: "Blocked",
+        tickets: map.tickets.filter(
+          (t) => t.issue.state === "open" && t.openBlockers.length > 0,
+        ),
+      },
+      { label: "Resolved", tickets: map.tickets.filter((t) => t.issue.state === "closed") },
+    ];
+    const list = section.createDiv({ cls: "wf-list" });
+    for (const g of groups) {
+      if (g.tickets.length === 0) continue;
+      const h = list.createDiv({ cls: "wf-group-h" });
+      h.createSpan({ text: g.label });
+      h.createSpan({ cls: "wf-group-count", text: String(g.tickets.length) });
+      for (const t of g.tickets) this.renderTicket(list, t, map, true);
+    }
+  }
+
+  /** Small always-available actions on a card: ⧉ copy and ↗ open on GitHub. */
+  private addIconActions(card: HTMLElement, url: string): void {
+    const actions = card.createDiv({ cls: "wf-actions" });
+    const copy = actions.createEl("button", {
+      cls: "wf-iconbtn",
+      attr: { "aria-label": "Copy /wayfinder command" },
+    });
+    setIcon(copy, "copy");
+    copy.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.plugin.copyCommand(url);
+    });
+    const open = actions.createEl("a", {
+      cls: "wf-iconbtn",
+      href: url,
+      attr: { "aria-label": "Open on GitHub" },
+    });
+    setIcon(open, "external-link");
+    open.addEventListener("click", (e) => e.stopPropagation());
+  }
+
+  private renderTicket(layerEl: HTMLElement, t: Ticket, map: MapTree, asRow = false): void {
+    const card = layerEl.createDiv({ cls: `wf-ticket wf-t-${t.type}${asRow ? " wf-ticket-row" : ""}` });
     card.dataset.issue = String(t.issue.number);
     const closed = t.issue.state === "closed";
     const blocked = !closed && t.openBlockers.length > 0;
@@ -226,15 +297,8 @@ export class WayfinderView extends ItemView {
       meta.setText("● open · takeable now");
     }
 
-    const openLink = card.createEl("a", {
-      cls: "wf-ext",
-      href: t.issue.html_url,
-      attr: { "aria-label": "Open on GitHub" },
-    });
-    setIcon(openLink, "external-link");
-    openLink.addEventListener("click", (e) => e.stopPropagation());
-
-    card.addEventListener("click", () => this.copyCommand(t.issue.html_url));
+    this.addIconActions(card, t.issue.html_url);
+    card.addEventListener("click", () => new TicketModal(this.app, this.plugin, t, map).open());
     this.attachHover(card, t, map);
   }
 
@@ -296,15 +360,8 @@ export class WayfinderView extends ItemView {
 
   // ── interactions ─────────────────────────────────────────────────────────
 
-  private copyCommand(url: string): void {
-    const text = this.plugin.settings.copyTemplate.replace("{url}", url);
-    void navigator.clipboard.writeText(text).then(
-      () => new Notice(`Copied: ${text}`),
-      () => new Notice("Copy failed — clipboard unavailable"),
-    );
-  }
-
   private attachHover(el: HTMLElement, ticket: Ticket | null, map: MapTree): void {
+    if (Platform.isMobile) return; // no hover on touch; the modal covers details
     el.addEventListener("mouseenter", () => {
       this.hoverCard?.remove();
       const card = document.body.createDiv({ cls: "wf-hovercard" });
@@ -345,7 +402,10 @@ export class WayfinderView extends ItemView {
           Date.parse(issue.updated_at),
         )}`,
       });
-      card.createDiv({ cls: "wf-hc-cta", text: "Click card to copy /wayfinder command · ↗ opens GitHub" });
+      card.createDiv({
+        cls: "wf-hc-cta",
+        text: "Click for details + comments · ⧉ copies /wayfinder · ↗ opens GitHub",
+      });
 
       const r = el.getBoundingClientRect();
       card.style.left = `${Math.min(r.left, window.innerWidth - 360)}px`;
