@@ -31,6 +31,6 @@ The view syncs when opened, re-polls every 2 minutes (configurable) while open, 
 npm install
 npm run dev      # watch build
 npm run build    # typecheck + production build
-npm run deploy   # build + copy into the vault (VAULT=… to override)
+npm run deploy   # build + copy into the vault (set VAULT via env or deploy.env)
 GH_TOKEN=$(gh auth token) npm run smoke   # run the data pipeline against the live repo
 ```
