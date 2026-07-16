@@ -1,18 +1,16 @@
-import { ItemView, Menu, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
+import { addIconActions, type TicketCardOptions } from "./cards";
+import { HoverCards, relativeTime } from "./hover";
+import { renderList } from "./list";
 import type { RawIssue } from "./model";
 import type WayfinderPlugin from "./main";
 import { TicketModal } from "./modal";
-import {
-  buildModel,
-  descriptionOf,
-  type MapTree,
-  type Model,
-  type Ticket,
-} from "./model";
+import { buildModel, type MapTree, type Model, type Ticket } from "./model";
+import { renderToolbar, type ViewMode } from "./toolbar";
+import { drawAllEdges, renderTree } from "./tree";
 
 export const VIEW_TYPE_WAYFINDER = "wayfinder-view";
 
-type ViewMode = "tree" | "list";
 const MODE_KEY = "wayfinder-view-mode";
 const ZOOM_KEY = "wayfinder-zoom";
 const ZOOM_MIN = 0.5;
@@ -51,7 +49,7 @@ export class WayfinderView extends ItemView {
     if (label) label.setText(`${Math.round(clamped * 100)}%`);
     this.scheduleEdges();
   }
-  private hoverCard: HTMLElement | null = null;
+  private hoverCards = new HoverCards();
   private resizeObserver: ResizeObserver | null = null;
 
   constructor(leaf: WorkspaceLeaf, private plugin: WayfinderPlugin) {
@@ -140,7 +138,7 @@ export class WayfinderView extends ItemView {
   async onClose(): Promise<void> {
     if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
     cancelAnimationFrame(this.edgeRaf);
-    this.hoverCard?.remove();
+    this.hoverCards.clear();
     this.resizeObserver?.disconnect();
   }
 
@@ -195,7 +193,9 @@ export class WayfinderView extends ItemView {
 
   private scheduleEdges(): void {
     cancelAnimationFrame(this.edgeRaf);
-    this.edgeRaf = requestAnimationFrame(() => this.drawAllEdges());
+    this.edgeRaf = requestAnimationFrame(() =>
+      drawAllEdges(this.contentEl, this.plugin.snapshot),
+    );
   }
 
   /** Make a card keyboard-operable: tabbable, Enter/Space activates. */
@@ -227,8 +227,7 @@ export class WayfinderView extends ItemView {
     root.empty();
     root.addClass("wayfinder-view");
     root.classList.toggle("wf-selecting", this.selectionMode);
-    this.hoverCard?.remove();
-    this.hoverCard = null;
+    this.hoverCards.clear();
     this.resizeObserver?.disconnect();
     this.resizeObserver = new ResizeObserver(() => {
       this.scheduleEdges();
@@ -255,7 +254,23 @@ export class WayfinderView extends ItemView {
 
     const model = buildModel(snapshot);
     this.pruneSelection(model);
-    this.renderTallyBar(root, model);
+    const anyExpanded = model.maps.some(
+      (map) =>
+        !(this.collapsedOverride.get(map.issue.number) ?? map.issue.state === "closed"),
+    );
+    renderToolbar(root, model, {
+      syncStatusText: this.syncStatusText(),
+      selectionMode: this.selectionMode,
+      mode: this.mode,
+      zoom: this.zoom,
+      anyExpanded,
+      toggleSelectionMode: () => this.toggleSelectionMode(),
+      toggleAllMaps: (expanded) => this.toggleAllMaps(model, expanded),
+      setZoom: (zoom) => this.setZoom(zoom),
+      adjustZoom: (factor) => this.setZoom(this.zoom * factor),
+      toggleMode: () => this.toggleMode(),
+      refresh: () => void this.plugin.sync(true),
+    });
     if (this.plugin.lastError) {
       root.createDiv({ text: `Last sync failed: ${this.plugin.lastError}`, cls: "wf-error" });
     }
@@ -281,108 +296,6 @@ export class WayfinderView extends ItemView {
     return this.prevUpdated.get(issue.number) !== issue.updated_at;
   }
 
-  // ── tally bar ────────────────────────────────────────────────────────────
-
-  private renderTallyBar(root: HTMLElement, model: Model): void {
-    const bar = root.createDiv({ cls: "wf-tally" });
-    if (!Platform.isMobile) {
-      for (const { type, tally } of model.tallies) {
-        const stat = bar.createDiv({ cls: `wf-stat wf-t-${type}` });
-        stat.createSpan({ cls: "wf-swatch" });
-        stat.createSpan({ cls: "wf-stat-num", text: `${tally.open}/${tally.total}` });
-        stat.createSpan({ cls: "wf-stat-lbl", text: type === "map" ? "maps" : type });
-        stat.setAttr("aria-label", `${type}: ${tally.open} open of ${tally.total} total`);
-      }
-    }
-
-    const frontier = model.maps.flatMap((m) => m.tickets.filter((t) => t.frontier));
-    const chip = (cls: string, count: number, label: string, aria: string): void => {
-      const stat = bar.createDiv({ cls: `wf-stat ${cls}` });
-      stat.createSpan({ cls: "wf-swatch" });
-      stat.createSpan({ cls: "wf-stat-num", text: String(count) });
-      stat.createSpan({ cls: "wf-stat-lbl", text: label });
-      stat.setAttr("aria-label", aria);
-    };
-    chip(
-      "wf-t-frontier",
-      frontier.length,
-      "takeable",
-      `${frontier.length} tickets open, unblocked, and unclaimed`,
-    );
-    const hitl = frontier.filter((t) => t.mode === "HITL").length;
-    const afk = frontier.filter((t) => t.mode === "AFK").length;
-    const either = frontier.filter((t) => t.mode === "either").length;
-    chip("wf-t-hitl", hitl, "need you", `${hitl} takeable tickets need a human in the loop`);
-    chip("wf-t-afk", afk, "agent-ready", `${afk} takeable tickets an agent can run alone`);
-    if (either > 0) {
-      chip("wf-t-either", either, "either", `${either} takeable task tickets could go either way`);
-    }
-
-    const right = bar.createDiv({ cls: "wf-tally-right" });
-    right.createSpan({ cls: "wf-sync-status", text: this.syncStatusText() });
-    const anyExpanded = model.maps.some(
-      (m) => !(this.collapsedOverride.get(m.issue.number) ?? m.issue.state === "closed"),
-    );
-    if (!Platform.isMobile) {
-      const selectBtn = right.createEl("button", {
-        cls: `wf-refresh wf-select-toggle${this.selectionMode ? " is-active" : ""}`,
-        attr: {
-          "aria-label": this.selectionMode ? "Leave ticket selection mode" : "Select tickets",
-          "aria-pressed": String(this.selectionMode),
-        },
-      });
-      setIcon(selectBtn, "list-checks");
-      selectBtn.createSpan({ text: this.selectionMode ? "Selecting" : "Select" });
-      selectBtn.addEventListener("click", () => this.toggleSelectionMode());
-
-      const foldBtn = right.createEl("button", {
-        cls: "wf-refresh",
-        attr: { "aria-label": anyExpanded ? "Collapse all maps" : "Expand all maps" },
-      });
-      setIcon(foldBtn, anyExpanded ? "chevrons-down-up" : "chevrons-up-down");
-      foldBtn.addEventListener("click", () => this.toggleAllMaps(model, anyExpanded));
-
-      const zoomOut = right.createEl("button", {
-        cls: "wf-refresh",
-        attr: { "aria-label": "Zoom out" },
-      });
-      setIcon(zoomOut, "zoom-out");
-      zoomOut.addEventListener("click", () => this.setZoom(this.zoom / 1.15));
-      const zoomLabel = right.createEl("button", {
-        cls: "wf-refresh wf-zoom-label",
-        text: `${Math.round(this.zoom * 100)}%`,
-        attr: { "aria-label": "Reset zoom" },
-      });
-      zoomLabel.addEventListener("click", () => this.setZoom(1));
-      const zoomIn = right.createEl("button", {
-        cls: "wf-refresh",
-        attr: { "aria-label": "Zoom in" },
-      });
-      setIcon(zoomIn, "zoom-in");
-      zoomIn.addEventListener("click", () => this.setZoom(this.zoom * 1.15));
-
-      const modeBtn = right.createEl("button", {
-        cls: "wf-refresh",
-        attr: { "aria-label": this.mode === "tree" ? "Switch to list view" : "Switch to tree view" },
-      });
-      setIcon(modeBtn, this.mode === "tree" ? "list" : "git-fork");
-      modeBtn.addEventListener("click", () => this.toggleMode());
-    }
-    const refresh = right.createEl("button", { cls: "wf-refresh", attr: { "aria-label": "Refresh now" } });
-    setIcon(refresh, "refresh-cw");
-    refresh.addEventListener("click", () => void this.plugin.sync(true));
-    if (Platform.isMobile) {
-      const overflow = right.createEl("button", {
-        cls: "wf-refresh",
-        text: "⋯",
-        attr: { "aria-label": "More Wayfinder controls" },
-      });
-      overflow.addEventListener("click", (e: MouseEvent) =>
-        this.showMobileTallyMenu(e, model, anyExpanded),
-      );
-    }
-  }
-
   private toggleAllMaps(model: Model, anyExpanded: boolean): void {
     for (const map of model.maps) this.collapsedOverride.set(map.issue.number, anyExpanded);
     this.render();
@@ -396,43 +309,6 @@ export class WayfinderView extends ItemView {
   private toggleSelectionMode(): void {
     this.selectionMode = !this.selectionMode;
     this.render();
-  }
-
-  private showMobileTallyMenu(e: MouseEvent, model: Model, anyExpanded: boolean): void {
-    const menu = new Menu();
-    menu.addItem((item) =>
-      item
-        .setTitle(this.selectionMode ? "Done selecting tickets" : "Select tickets")
-        .setIcon("list-checks")
-        .onClick(() => this.toggleSelectionMode()),
-    );
-    menu.addSeparator();
-    menu.addItem((item) =>
-      item
-        .setTitle(this.mode === "tree" ? "Switch to list view" : "Switch to tree view")
-        .setIcon(this.mode === "tree" ? "list" : "git-fork")
-        .onClick(() => this.toggleMode()),
-    );
-    menu.addItem((item) =>
-      item
-        .setTitle(anyExpanded ? "Collapse all maps" : "Expand all maps")
-        .setIcon(anyExpanded ? "chevrons-down-up" : "chevrons-up-down")
-        .onClick(() => this.toggleAllMaps(model, anyExpanded)),
-    );
-    menu.addItem((item) =>
-      item.setTitle("Zoom in").setIcon("zoom-in").onClick(() => this.setZoom(this.zoom * 1.15)),
-    );
-    menu.addItem((item) =>
-      item.setTitle("Zoom out").setIcon("zoom-out").onClick(() => this.setZoom(this.zoom / 1.15)),
-    );
-    menu.addItem((item) =>
-      item.setTitle("Reset zoom").setIcon("rotate-ccw").onClick(() => this.setZoom(1)),
-    );
-    menu.addSeparator();
-    for (const { type, tally } of model.tallies) {
-      menu.addItem((item) => item.setTitle(`${type} ${tally.open}/${tally.total}`).setDisabled(true));
-    }
-    menu.showAtMouseEvent(e);
   }
 
   private pruneSelection(model: Model): void {
@@ -592,14 +468,14 @@ export class WayfinderView extends ItemView {
     }
 
     if (this.changedSinceLastRender(map.issue)) head.addClass("wf-changed");
-    this.addIconActions(head, map.issue, () =>
+    addIconActions(head, map.issue, this.plugin, () =>
       new TicketModal(this.app, this.plugin, null, map).open(),
     );
     this.makeInteractive(head, () => {
       this.collapsedOverride.set(map.issue.number, expanded);
       this.render();
     });
-    this.attachHover(head, null, map);
+    this.hoverCards.attach(head, null, map);
 
     if (!expanded) return;
     if (map.tickets.length === 0) {
@@ -608,299 +484,25 @@ export class WayfinderView extends ItemView {
     }
 
     if (this.mode === "list") {
-      this.renderList(section, map);
+      renderList(section, map, this.ticketCardOptions());
       return;
     }
 
-    const scroller = section.createDiv({ cls: "wf-tree-scroll" });
-    scroller.dataset.mapNumber = String(map.issue.number);
-    const tree = scroller.createDiv({ cls: "wf-tree" });
-    tree.dataset.mapNumber = String(map.issue.number);
-    const svg = tree.createSvg("svg", { cls: "wf-edges" });
-    svg.setAttr("aria-hidden", "true");
-
-    for (const layer of map.layers) {
-      const layerEl = tree.createDiv({ cls: "wf-layer" });
-      for (const ticket of layer) this.renderTicket(layerEl, ticket, map);
-    }
-
+    const tree = renderTree(section, map, this.ticketCardOptions());
     this.resizeObserver?.observe(tree);
   }
 
-  /** Compact mode: full-width rows grouped by actionability. */
-  private renderList(section: HTMLElement, map: MapTree): void {
-    const groups: { label: string; tickets: Ticket[] }[] = [
-      { label: "Takeable", tickets: map.tickets.filter((t) => t.frontier) },
-      {
-        label: "Claimed",
-        tickets: map.tickets.filter(
-          (t) =>
-            t.issue.state === "open" &&
-            !t.frontier &&
-            !t.unverified &&
-            t.openBlockers.length === 0,
-        ),
-      },
-      {
-        label: "Blocked",
-        tickets: map.tickets.filter(
-          (t) => t.issue.state === "open" && (t.openBlockers.length > 0 || t.unverified),
-        ),
-      },
-      { label: "Resolved", tickets: map.tickets.filter((t) => t.issue.state === "closed") },
-    ];
-    const list = section.createDiv({ cls: "wf-list" });
-    for (const g of groups) {
-      if (g.tickets.length === 0) continue;
-      const h = list.createDiv({ cls: "wf-group-h" });
-      h.createSpan({ text: g.label });
-      h.createSpan({ cls: "wf-group-count", text: String(g.tickets.length) });
-      for (const t of g.tickets) this.renderTicket(list, t, map, true);
-    }
-  }
-
-  /**
-   * Small always-available actions on a card: optional ⓘ details, ⧉ copy,
-   * ↗ GitHub. When `claimCheck` is set (takeable tickets), copy/open first
-   * verify against GitHub that the ticket wasn't claimed since the last sync;
-   * a warning notice replaces the action when the live issue is no longer clear.
-   */
-  private addIconActions(
-    card: HTMLElement,
-    issue: RawIssue,
-    onInfo?: () => void,
-    claimCheck = false,
-  ): void {
-    const actions = card.createDiv({ cls: "wf-actions" });
-    if (onInfo) {
-      const info = actions.createEl("button", {
-        cls: "wf-iconbtn",
-        attr: { "aria-label": "Show details" },
-      });
-      setIcon(info, "info");
-      info.addEventListener("click", (e) => {
-        e.stopPropagation();
-        onInfo();
-      });
-    }
-
-    const guarded = async (action: () => void): Promise<void> => {
-      if (claimCheck) {
-        await this.plugin.guardedAction(issue.number, action);
-        return;
-      }
-      action();
+  private ticketCardOptions(): Omit<TicketCardOptions, "asRow"> {
+    return {
+      app: this.app,
+      plugin: this.plugin,
+      selectionMode: this.selectionMode,
+      selected: (ticket) => this.selectedIssues.has(ticket.issue.number),
+      changed: (issue) => this.changedSinceLastRender(issue),
+      makeInteractive: (element, activate) => this.makeInteractive(element, activate),
+      attachHover: (element, ticket, map) => this.hoverCards.attach(element, ticket, map),
+      select: (ticket) => this.toggleTicketSelection(ticket),
     };
-
-    const copy = actions.createEl("button", {
-      cls: "wf-iconbtn",
-      attr: { "aria-label": "Copy /wayfinder command" },
-    });
-    setIcon(copy, "copy");
-    copy.addEventListener("click", (e) => {
-      e.stopPropagation();
-      void guarded(() => this.plugin.copyCommand(issue.html_url));
-    });
-
-    const open = actions.createEl("a", {
-      cls: "wf-iconbtn",
-      href: issue.html_url,
-      attr: { "aria-label": "Open on GitHub" },
-    });
-    setIcon(open, "external-link");
-    open.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (!claimCheck) return; // plain link navigation
-      e.preventDefault();
-      void guarded(() => window.open(issue.html_url, "_blank"));
-    });
   }
 
-  private renderTicket(layerEl: HTMLElement, t: Ticket, map: MapTree, asRow = false): void {
-    const card = layerEl.createDiv({ cls: `wf-ticket wf-t-${t.type}${asRow ? " wf-ticket-row" : ""}` });
-    card.dataset.issue = String(t.issue.number);
-    const closed = t.issue.state === "closed";
-    const blocked = !closed && t.openBlockers.length > 0;
-    if (closed) card.addClass("wf-closed");
-    if (blocked) card.addClass("wf-blocked");
-    if (t.frontier) {
-      card.addClass("wf-frontier");
-      card.createSpan({ cls: "wf-frontier-flag", text: "FRONTIER" });
-    }
-    if (this.selectionMode && t.frontier) {
-      card.setAttr("aria-pressed", String(this.selectedIssues.has(t.issue.number)));
-      if (this.selectedIssues.has(t.issue.number)) card.addClass("wf-selected");
-    }
-
-    const row1 = card.createDiv({ cls: "wf-row1" });
-    row1.createSpan({ cls: "wf-num", text: `#${t.issue.number}` });
-    row1.createSpan({ cls: "wf-type", text: t.type });
-    row1.createSpan({ cls: `wf-mode wf-mode-${t.mode.toLowerCase()}`, text: t.mode });
-
-    card.createDiv({ cls: "wf-ticket-title", text: t.issue.title });
-
-    let metaText: string;
-    if (closed) {
-      metaText = "✓ resolved";
-    } else if (t.unverified) {
-      metaText = "⚠ blockers unverified";
-    } else if (blocked) {
-      metaText = `🔒 blocked by ${t.openBlockers.map((n) => `#${n}`).join(" ")}`;
-    } else if (t.issue.assignees.length > 0) {
-      const idle = claimedIdleAge(t.issue.updated_at);
-      metaText = `● claimed by ${t.issue.assignees.join(", ")}${idle ? ` · idle ${idle}` : ""}`;
-    } else {
-      metaText = "● open · takeable now";
-    }
-    if (!closed && t.downstreamImpact > 0) metaText += ` · unblocks ${t.downstreamImpact}`;
-    card.createDiv({ cls: "wf-meta", text: metaText });
-
-    if (this.changedSinceLastRender(t.issue)) card.addClass("wf-changed");
-    this.addIconActions(card, t.issue, undefined, t.frontier);
-    this.makeInteractive(card, () => {
-      if (this.selectionMode && t.frontier) {
-        this.toggleTicketSelection(t);
-        return;
-      }
-      new TicketModal(this.app, this.plugin, t, map).open();
-    });
-    this.attachHover(card, t, map);
-  }
-
-  // ── edges ────────────────────────────────────────────────────────────────
-
-  private drawAllEdges(): void {
-    for (const tree of Array.from(this.contentEl.querySelectorAll<HTMLElement>(".wf-tree"))) {
-      this.drawEdges(tree);
-    }
-  }
-
-  private drawEdges(tree: HTMLElement): void {
-    const svg = tree.querySelector<SVGSVGElement>("svg.wf-edges");
-    const snapshot = this.plugin.snapshot;
-    if (!svg || !snapshot) return;
-    const treeRect = tree.getBoundingClientRect();
-    if (treeRect.width === 0) return;
-    svg.setAttr("viewBox", `0 0 ${treeRect.width} ${treeRect.height}`);
-    svg.empty();
-
-    const cards = new Map<number, HTMLElement>();
-    for (const el of Array.from(tree.querySelectorAll<HTMLElement>(".wf-ticket"))) {
-      cards.set(Number(el.dataset.issue), el);
-    }
-
-    for (const [num, card] of cards) {
-      const dep = snapshot.deps[String(num)];
-      if (!dep) continue;
-      for (const blocker of dep.blockedBy) {
-        const from = cards.get(blocker);
-        if (!from) continue; // blocker outside this map
-        this.drawEdge(svg, treeRect, from, card);
-      }
-    }
-  }
-
-  private drawEdge(
-    svg: SVGSVGElement,
-    treeRect: DOMRect,
-    from: HTMLElement,
-    to: HTMLElement,
-  ): void {
-    const a = from.getBoundingClientRect();
-    const b = to.getBoundingClientRect();
-    const x1 = a.left + a.width / 2 - treeRect.left;
-    const y1 = a.bottom - treeRect.top;
-    const x2 = b.left + b.width / 2 - treeRect.left;
-    const y2 = b.top - treeRect.top;
-    const my = (y2 - y1) / 2;
-
-    const path = svg.createSvg("path");
-    path.setAttr("d", `M ${x1} ${y1} C ${x1} ${y1 + my}, ${x2} ${y2 - my}, ${x2} ${y2}`);
-    path.setAttr("fill", "none");
-    const frontier = to.hasClass("wf-frontier");
-    const closed = to.hasClass("wf-closed");
-    path.setAttr("class", frontier ? "wf-edge-frontier" : closed ? "wf-edge-closed" : "wf-edge-open");
-    if (to.hasClass("wf-blocked")) path.setAttr("stroke-dasharray", "4 3");
-  }
-
-  // ── interactions ─────────────────────────────────────────────────────────
-
-  private attachHover(el: HTMLElement, ticket: Ticket | null, map: MapTree): void {
-    if (Platform.isMobile) return; // no hover on touch; the modal covers details
-    el.addEventListener("mouseenter", () => {
-      this.hoverCard?.remove();
-      const card = document.body.createDiv({ cls: "wf-hovercard" });
-      this.hoverCard = card;
-
-      const issue = ticket ? ticket.issue : map.issue;
-      const row = card.createDiv({ cls: "wf-row1" });
-      row.createSpan({ cls: "wf-num", text: `#${issue.number}` });
-      if (ticket) {
-        row.createSpan({ cls: `wf-type wf-hc-${ticket.type}`, text: ticket.type });
-        row.createSpan({ cls: `wf-mode wf-mode-${ticket.mode.toLowerCase()}`, text: ticket.mode });
-      } else {
-        row.createSpan({ cls: "wf-type wf-hc-map", text: "map" });
-      }
-      card.createDiv({ cls: "wf-hc-title", text: issue.title });
-
-      const desc = descriptionOf(issue.body);
-      if (desc) {
-        card.createDiv({
-          cls: "wf-hc-desc",
-          text: desc.length > 420 ? `${desc.slice(0, 420)}…` : desc,
-        });
-      }
-
-      if (ticket && ticket.blockedBy.length > 0) {
-        const kv = card.createDiv({ cls: "wf-hc-kv" });
-        kv.createSpan({ text: "Blocked by: " });
-        const openSet = new Set(ticket.openBlockers);
-        kv.createSpan({
-          text: ticket.blockedBy
-            .map((n) => (openSet.has(n) ? `#${n}` : `#${n} ✓`))
-            .join("  "),
-        });
-      }
-      const kv2 = card.createDiv({ cls: "wf-hc-kv" });
-      kv2.createSpan({
-        text: `Assignee: ${issue.assignees.join(", ") || "—"} · Updated ${relativeTime(
-          Date.parse(issue.updated_at),
-        )}`,
-      });
-      card.createDiv({
-        cls: "wf-hc-cta",
-        text: ticket
-          ? "Click for details + comments · ⧉ copies /wayfinder · ↗ opens GitHub"
-          : "Click to expand/collapse · ⓘ details + comments · ⧉ copies /wayfinder",
-      });
-
-      const r = el.getBoundingClientRect();
-      card.style.left = `${Math.min(r.left, window.innerWidth - 360)}px`;
-      card.style.top =
-        r.bottom + 12 + card.offsetHeight < window.innerHeight
-          ? `${r.bottom + 8}px`
-          : `${Math.max(8, r.top - card.offsetHeight - 8)}px`;
-    });
-    el.addEventListener("mouseleave", () => {
-      this.hoverCard?.remove();
-      this.hoverCard = null;
-    });
-  }
-}
-
-function relativeTime(ts: number): string {
-  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 60) return "just now";
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m} min ago`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
-}
-
-function claimedIdleAge(updatedAt: string): string | null {
-  const elapsed = Date.now() - Date.parse(updatedAt);
-  if (!Number.isFinite(elapsed) || elapsed <= 24 * 60 * 60 * 1000) return null;
-  const hours = Math.round(elapsed / (60 * 60 * 1000));
-  return hours < 24 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 }

@@ -231,28 +231,67 @@ function assignDownstreamImpact(tickets: Ticket[]): void {
   }
 }
 
-/** Longest-path layering over in-map blocking edges, with a cycle guard. */
+/** Longest-path layering over in-map blocking edges; cycles share one layer. */
 function assignLayers(tickets: Ticket[]): void {
   const inMap = new Map(tickets.map((t) => [t.issue.number, t]));
-  const memo = new Map<number, number>();
-  const visiting = new Set<number>();
+  const indices = new Map<number, number>();
+  const lowLinks = new Map<number, number>();
+  const stack: number[] = [];
+  const onStack = new Set<number>();
+  const componentOf = new Map<number, number>();
+  const components: number[][] = [];
+  let nextIndex = 0;
 
-  const layerOf = (t: Ticket): number => {
-    const cached = memo.get(t.issue.number);
-    if (cached !== undefined) return cached;
-    if (visiting.has(t.issue.number)) return 0; // cycle — flatten rather than crash
-    visiting.add(t.issue.number);
-    let layer = 0;
-    for (const b of t.blockedBy) {
-      const blocker = inMap.get(b);
-      if (blocker) layer = Math.max(layer, layerOf(blocker) + 1);
+  const visit = (number: number): void => {
+    const index = nextIndex++;
+    indices.set(number, index);
+    lowLinks.set(number, index);
+    stack.push(number);
+    onStack.add(number);
+
+    for (const blocker of inMap.get(number)!.blockedBy) {
+      if (!inMap.has(blocker)) continue;
+      if (!indices.has(blocker)) {
+        visit(blocker);
+        lowLinks.set(number, Math.min(lowLinks.get(number)!, lowLinks.get(blocker)!));
+      } else if (onStack.has(blocker)) {
+        lowLinks.set(number, Math.min(lowLinks.get(number)!, indices.get(blocker)!));
+      }
     }
-    visiting.delete(t.issue.number);
-    memo.set(t.issue.number, layer);
+
+    if (lowLinks.get(number) !== index) return;
+    const component: number[] = [];
+    for (let member = stack.pop(); member !== undefined; member = stack.pop()) {
+      onStack.delete(member);
+      componentOf.set(member, components.length);
+      component.push(member);
+      if (member === number) break;
+    }
+    components.push(component);
+  };
+
+  for (const ticket of tickets) {
+    if (!indices.has(ticket.issue.number)) visit(ticket.issue.number);
+  }
+
+  const memo = new Map<number, number>();
+  const layerOf = (component: number): number => {
+    const cached = memo.get(component);
+    if (cached !== undefined) return cached;
+    let layer = 0;
+    for (const number of components[component]) {
+      for (const blocker of inMap.get(number)!.blockedBy) {
+        const blockerComponent = componentOf.get(blocker);
+        if (blockerComponent !== undefined && blockerComponent !== component) {
+          layer = Math.max(layer, layerOf(blockerComponent) + 1);
+        }
+      }
+    }
+    memo.set(component, layer);
     return layer;
   };
 
-  for (const t of tickets) t.layer = layerOf(t);
+  for (const ticket of tickets) ticket.layer = layerOf(componentOf.get(ticket.issue.number)!);
 }
 
 /** Sort each layer so children sit near the mean position of their blockers. */
