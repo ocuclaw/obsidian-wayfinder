@@ -2,7 +2,7 @@
 
 Visualizes wayfinder maps from a GitHub repo's issues inside Obsidian: each `wayfinder:map` issue renders as a head card with its tickets arranged in a **dependency-layered tree** below it, drawn from GitHub's native issue-dependency (blocked-by) edges.
 
-The wayfinder skill and methodology this plugin visualizes — maps, tickets, frontier, AFK/HITL delegation — come from [Matt Pocock's skills repo](https://github.com/mattpocock/skills); this plugin just draws what that workflow puts in your issues.
+The wayfinder skill and methodology this plugin visualizes — maps, tickets, frontier, AFK/HITL delegation — come from [Matt Pocock's skills repo](https://github.com/mattpocock/skills); this plugin just draws what that workflow puts in your issues. Plugin 1.0.0 is aligned to the v1.1.0 skills release.
 
 ![type colors follow GitHub's label hues]
 
