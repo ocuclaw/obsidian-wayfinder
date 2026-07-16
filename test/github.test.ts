@@ -72,7 +72,11 @@ test("listAllIssues marks a full 5000-issue cap as truncated", async () => {
 
 test("blockedBy, subIssues, and comments paginate independently", async () => {
   const urls: string[] = [];
-  const hundredNumbers = Array.from({ length: 100 }, (_, index) => ({ number: index + 1 }));
+  const hundredNumbers = Array.from({ length: 100 }, (_, index) => ({
+    number: index + 1,
+    state: "open",
+    repository: { full_name: index === 0 ? "other/repo" : "owner/repo" },
+  }));
   const hundredComments = Array.from({ length: 100 }, (_, index) => ({
     user: { login: `user-${index}` },
     created_at: "2026-01-01T00:00:00Z",
@@ -82,7 +86,12 @@ test("blockedBy, subIssues, and comments paginate independently", async () => {
     urls.push(url);
     const second = url.includes("page=2");
     if (url.includes("dependencies/blocked_by")) {
-      return response(200, second ? [{ number: 101 }] : hundredNumbers);
+      return response(
+        200,
+        second
+          ? [{ number: 101, state: "closed", repository: { full_name: "owner/repo" } }]
+          : hundredNumbers,
+      );
     }
     if (url.includes("sub_issues")) {
       return response(200, second ? [{ number: 201 }] : hundredNumbers);
@@ -96,7 +105,10 @@ test("blockedBy, subIssues, and comments paginate independently", async () => {
   };
   const gh = client(http);
 
-  assert.equal((await gh.blockedBy(7))?.length, 101);
+  const blockers = await gh.blockedBy(7);
+  assert.equal(blockers?.length, 101);
+  assert.deepEqual(blockers?.[0], { number: 1, state: "open", repo: "other/repo" });
+  assert.deepEqual(blockers?.at(-1), { number: 101, state: "closed" });
   assert.equal((await gh.subIssues(7))?.at(-1), 201);
   const comments = await gh.comments(7);
   assert.equal(comments.length, 101);
@@ -108,13 +120,13 @@ test("blockedBy, subIssues, and comments paginate independently", async () => {
   assert.equal(urls.filter((url) => url.includes("page=2")).length, 3);
 });
 
-test("dependency and sub-issue lookups map 404 to empty and other failures to null", async () => {
+test("dependency 404 maps to empty while sub-issue 404 and other failures map to null", async () => {
   const statuses = [404, 500, 404, 403];
   const gh = client(async () => response(statuses.shift()!, []));
 
   assert.deepEqual(await gh.blockedBy(1), []);
   assert.equal(await gh.blockedBy(2), null);
-  assert.deepEqual(await gh.subIssues(3), []);
+  assert.equal(await gh.subIssues(3), null);
   assert.equal(await gh.subIssues(4), null);
 });
 
@@ -132,6 +144,22 @@ test("classifyError covers authentication, rate limits, permissions, missing rep
     "Token lacks permission for this repo (needs read-only Issues).",
   );
   assert.equal(
+    classifyError(403, { "retry-after": "30" }),
+    "GitHub is rate limiting requests — retry in 30s.",
+  );
+  assert.equal(
+    classifyError(403, {}, "You have exceeded a secondary rate limit"),
+    "GitHub is rate limiting requests — retry shortly.",
+  );
+  assert.equal(
+    classifyError(403, {}, "Abuse detection mechanism triggered"),
+    "GitHub is rate limiting requests — retry shortly.",
+  );
+  assert.equal(
+    classifyError(429, {}),
+    "GitHub is rate limiting requests — retry shortly.",
+  );
+  assert.equal(
     classifyError(404, {}),
     "Repo not found (check owner/name) or token has no access to it.",
   );
@@ -141,13 +169,29 @@ test("classifyError covers authentication, rate limits, permissions, missing rep
   );
 });
 
+test("testConnection rejects when the repo is visible but Issues are not readable", async () => {
+  const gh = client(async (url) => {
+    if (url.endsWith("/owner/repo")) return response(200, { full_name: "owner/repo" });
+    if (url.includes("/issues?state=all&per_page=1")) {
+      return response(403, { message: "Resource not accessible by personal access token" });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+
+  await assert.rejects(
+    () => gh.testConnection(),
+    /Token lacks permission for this repo \(needs read-only Issues\)\./,
+  );
+});
+
 test("fetchSnapshot reuses unchanged dependency entries and preserves incremental full-sync time", async () => {
   const calls: string[] = [];
   const previousDependency = {
     updatedAt: "2026-01-01T00:00:00Z",
-    blockedBy: [41],
+    blockedBy: [{ number: 41 }],
   };
   const prev: Snapshot = {
+    schemaVersion: 2,
     repo: "old/repo",
     fetchedAt: 10,
     lastFullSync: 5,
@@ -172,6 +216,7 @@ test("fetchSnapshot reuses unchanged dependency entries and preserves incrementa
   assert.strictEqual(snap.deps["42"], previousDependency);
   assert.deepEqual(snap.parents, { "42": 7 });
   assert.equal(snap.repo, "new/repo");
+  assert.equal(snap.schemaVersion, 2);
   assert.equal(snap.lastFullSync, 5);
   assert.ok(snap.fetchedAt >= before && snap.fetchedAt <= after);
 });
@@ -189,12 +234,104 @@ test("fetchSnapshot records a new unverified dependency when no prior entry exis
   assert.deepEqual(snap.deps["42"], { updatedAt: "", blockedBy: [], unverified: true });
   assert.equal(snap.lastFullSync, snap.fetchedAt);
   assert.deepEqual(warnings, [
-    "GitHub is having problems (HTTP 500) — will retry on next sync.",
+    "Couldn't verify blockers for 1 ticket(s) — shown as unverified (GitHub is having problems (HTTP 500) — will retry on next sync.)",
+  ]);
+});
+
+test("fetchSnapshot preserves cached edges as unverified after a dependency failure", async () => {
+  const prev: Snapshot = {
+    schemaVersion: 2,
+    repo: "owner/repo",
+    fetchedAt: 10,
+    issues: [],
+    deps: {
+      "42": { updatedAt: "old", blockedBy: [{ number: 41, state: "open" }] },
+    },
+    parents: {},
+  };
+  const snap = await fetchSnapshot(
+    client(async (url) => {
+      if (url.includes("/issues?")) {
+        return response(200, [rawIssue(42, undefined, { updated_at: "new" })]);
+      }
+      if (url.includes("/dependencies/")) return response(500, { message: "server error" });
+      throw new Error(`Unexpected request: ${url}`);
+    }),
+    prev,
+    false,
+  );
+
+  assert.deepEqual(snap.deps["42"], {
+    updatedAt: "old",
+    blockedBy: [{ number: 41, state: "open" }],
+    unverified: true,
+  });
+});
+
+test("fetchSnapshot retries an unchanged cached dependency when it is unverified", async () => {
+  let dependencyCalls = 0;
+  const prev: Snapshot = {
+    schemaVersion: 2,
+    repo: "owner/repo",
+    fetchedAt: 10,
+    issues: [],
+    deps: {
+      "42": {
+        updatedAt: "2026-01-01T00:00:00Z",
+        blockedBy: [{ number: 41 }],
+        unverified: true,
+      },
+    },
+    parents: {},
+  };
+  const snap = await fetchSnapshot(
+    client(async (url) => {
+      if (url.includes("/issues?")) return response(200, [rawIssue(42)]);
+      if (url.includes("/dependencies/")) {
+        dependencyCalls++;
+        return response(200, [
+          { number: 43, state: "open", repository: { full_name: "owner/repo" } },
+        ]);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }),
+    prev,
+    false,
+  );
+
+  assert.equal(dependencyCalls, 1);
+  assert.deepEqual(snap.deps["42"], {
+    updatedAt: "2026-01-01T00:00:00Z",
+    blockedBy: [{ number: 43, state: "open" }],
+  });
+});
+
+test("fetchSnapshot warns when only some dependency lookups fail", async () => {
+  const warnings: string[] = [];
+  const snap = await fetchSnapshot(
+    client(async (url) => {
+      if (url.includes("/issues?")) return response(200, [rawIssue(41), rawIssue(42)]);
+      if (url.includes("/issues/41/dependencies/")) return response(200, []);
+      if (url.includes("/issues/42/dependencies/")) {
+        return response(403, { message: "forbidden" });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }),
+    null,
+    false,
+    (message) => warnings.push(message),
+  );
+
+  assert.deepEqual(snap.deps["41"].blockedBy, []);
+  assert.equal(snap.deps["42"].unverified, true);
+  assert.deepEqual(warnings, [
+    "Couldn't verify blockers for 1 ticket(s) — shown as unverified (Token lacks permission for this repo (needs read-only Issues).)",
   ]);
 });
 
 test("fetchSnapshot carries parent links forward when a map sub-issue lookup fails", async () => {
   const prev: Snapshot = {
+    schemaVersion: 2,
     repo: "owner/repo",
     fetchedAt: 10,
     lastFullSync: 5,
@@ -210,13 +347,51 @@ test("fetchSnapshot carries parent links forward when a map sub-issue lookup fai
     throw new Error(`Unexpected request: ${url}`);
   };
 
-  const snap = await fetchSnapshot(client(http), prev, false);
+  const warnings: string[] = [];
+  const snap = await fetchSnapshot(client(http), prev, false, (message) => warnings.push(message));
 
   assert.deepEqual(snap.parents, { "42": 7 });
+  assert.deepEqual(warnings, [
+    "Couldn't refresh sub-issues for 1 map(s) — tree structure may be stale",
+  ]);
+});
+
+test("fetchSnapshot warns on one failed map and preserves only that map's previous parents", async () => {
+  const prev: Snapshot = {
+    schemaVersion: 2,
+    repo: "owner/repo",
+    fetchedAt: 10,
+    issues: [],
+    deps: {},
+    parents: { "41": 7, "42": 8, "99": 9 },
+  };
+  const warnings: string[] = [];
+  const snap = await fetchSnapshot(
+    client(async (url) => {
+      if (url.includes("/issues?")) {
+        return response(200, [
+          rawIssue(7, ["wayfinder:map"]),
+          rawIssue(8, ["wayfinder:map"]),
+        ]);
+      }
+      if (url.includes("/issues/7/sub_issues")) return response(500, []);
+      if (url.includes("/issues/8/sub_issues")) return response(200, [{ number: 43 }]);
+      throw new Error(`Unexpected request: ${url}`);
+    }),
+    prev,
+    false,
+    (message) => warnings.push(message),
+  );
+
+  assert.deepEqual(snap.parents, { "41": 7, "43": 8 });
+  assert.deepEqual(warnings, [
+    "Couldn't refresh sub-issues for 1 map(s) — tree structure may be stale",
+  ]);
 });
 
 test("fetchSnapshot replaces lastFullSync when a full refresh is requested", async () => {
   const prev: Snapshot = {
+    schemaVersion: 2,
     repo: "owner/repo",
     fetchedAt: 10,
     lastFullSync: 5,

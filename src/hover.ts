@@ -1,5 +1,5 @@
 import { Platform } from "obsidian";
-import { descriptionOf, type MapTree, type Ticket } from "./model";
+import { blockerLabel, descriptionOf, type MapTree, type Ticket } from "./model";
 
 export class HoverCards {
   private card: HTMLElement | null = null;
@@ -38,13 +38,15 @@ export class HoverCards {
         });
       }
 
-      if (ticket && ticket.blockedBy.length > 0) {
+      if (ticket && ticket.blockers.length > 0) {
         const kv = card.createDiv({ cls: "wf-hc-kv" });
         kv.createSpan({ text: "Blocked by: " });
         const openSet = new Set(ticket.openBlockers);
         kv.createSpan({
-          text: ticket.blockedBy
-            .map((number) => (openSet.has(number) ? `#${number}` : `#${number} ✓`))
+          text: ticket.blockers
+            .map((blocker) =>
+              openSet.has(blocker) ? blockerLabel(blocker) : `${blockerLabel(blocker)} ✓`,
+            )
             .join("  "),
         });
       }

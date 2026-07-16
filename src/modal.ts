@@ -1,10 +1,11 @@
 import { App, Component, MarkdownRenderer, Modal, setIcon } from "obsidian";
 import type WayfinderPlugin from "./main";
-import { descriptionOf, type MapTree, type Ticket } from "./model";
+import { blockerLabel, descriptionOf, type MapTree, type Ticket } from "./model";
 
 /** Detail card for a ticket or map: description, blockers, progress, comments. */
 export class TicketModal extends Modal {
   private comp = new Component();
+  private closed = false;
 
   constructor(
     app: App,
@@ -16,6 +17,7 @@ export class TicketModal extends Modal {
   }
 
   onOpen(): void {
+    this.closed = false;
     this.comp.load();
     const { contentEl } = this;
     contentEl.addClass("wf-modal");
@@ -65,14 +67,17 @@ export class TicketModal extends Modal {
       });
     }
 
-    if (this.ticket && this.ticket.blockedBy.length > 0) {
+    if (this.ticket && this.ticket.blockers.length > 0) {
       const openSet = new Set(this.ticket.openBlockers);
       const kv = contentEl.createDiv({ cls: "wf-hc-kv" });
       kv.createSpan({ text: "Blocked by: " });
-      for (const n of this.ticket.blockedBy) {
+      for (const blocker of this.ticket.blockers) {
+        const repo = blocker.repo ?? this.plugin.settings.repo;
         kv.createEl("a", {
-          text: openSet.has(n) ? `#${n} (open)` : `#${n} ✓`,
-          href: `https://github.com/${this.plugin.settings.repo}/issues/${n}`,
+          text: openSet.has(blocker)
+            ? `${blockerLabel(blocker)} (open)`
+            : `${blockerLabel(blocker)} ✓`,
+          href: `https://github.com/${repo}/issues/${blocker.number}`,
           cls: "wf-blocker-link",
         });
       }
@@ -99,6 +104,7 @@ export class TicketModal extends Modal {
     void this.plugin
       .fetchComments(issue.number)
       .then((comments) => {
+        if (this.closed) return;
         status.remove();
         if (comments.length === 0) {
           commentsEl.createDiv({ cls: "wf-hc-kv", text: "No comments." });
@@ -115,6 +121,7 @@ export class TicketModal extends Modal {
         }
       })
       .catch((e) => {
+        if (this.closed) return;
         status.setText(`Could not load comments: ${e instanceof Error ? e.message : String(e)}`);
       });
   }
@@ -129,6 +136,7 @@ export class TicketModal extends Modal {
   }
 
   onClose(): void {
+    this.closed = true;
     this.comp.unload();
     this.contentEl.empty();
   }

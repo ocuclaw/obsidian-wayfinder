@@ -1,7 +1,7 @@
 import { setIcon, type App } from "obsidian";
 import type WayfinderPlugin from "./main";
 import { TicketModal } from "./modal";
-import type { MapTree, RawIssue, Ticket } from "./model";
+import { blockerLabel, type MapTree, type RawIssue, type Ticket } from "./model";
 
 export interface TicketCardOptions {
   app: App;
@@ -34,13 +34,16 @@ export function renderTicketCard(
     card.addClass("wf-frontier");
     card.createSpan({ cls: "wf-frontier-flag", text: "FRONTIER" });
   }
+  const main = card.createDiv({ cls: "wf-card-main" });
+  main.setAttr("aria-label", `#${ticket.issue.number} ${ticket.issue.title}`);
+
   if (options.selectionMode && ticket.frontier) {
     const selected = options.selected(ticket);
-    card.setAttr("aria-pressed", String(selected));
+    main.setAttr("aria-pressed", String(selected));
     if (selected) card.addClass("wf-selected");
   }
 
-  const row1 = card.createDiv({ cls: "wf-row1" });
+  const row1 = main.createDiv({ cls: "wf-row1" });
   row1.createSpan({ cls: "wf-num", text: `#${ticket.issue.number}` });
   row1.createSpan({ cls: "wf-type", text: ticket.type });
   row1.createSpan({
@@ -48,7 +51,7 @@ export function renderTicketCard(
     text: ticket.mode,
   });
 
-  card.createDiv({ cls: "wf-ticket-title", text: ticket.issue.title });
+  main.createDiv({ cls: "wf-ticket-title", text: ticket.issue.title });
 
   let metaText: string;
   if (closed) {
@@ -56,7 +59,7 @@ export function renderTicketCard(
   } else if (ticket.unverified) {
     metaText = "⚠ blockers unverified";
   } else if (blocked) {
-    metaText = `🔒 blocked by ${ticket.openBlockers.map((number) => `#${number}`).join(" ")}`;
+    metaText = `🔒 blocked by ${ticket.openBlockers.map(blockerLabel).join(" ")}`;
   } else if (ticket.issue.assignees.length > 0) {
     const idle = claimedIdleAge(ticket.issue.updated_at);
     metaText = `● claimed by ${ticket.issue.assignees.join(", ")}${idle ? ` · idle ${idle}` : ""}`;
@@ -66,11 +69,11 @@ export function renderTicketCard(
   if (!closed && ticket.downstreamImpact > 0) {
     metaText += ` · unblocks ${ticket.downstreamImpact}`;
   }
-  card.createDiv({ cls: "wf-meta", text: metaText });
+  main.createDiv({ cls: "wf-meta", text: metaText });
 
   if (options.changed(ticket.issue)) card.addClass("wf-changed");
   addIconActions(card, ticket.issue, options.plugin, undefined, ticket.frontier);
-  options.makeInteractive(card, () => {
+  options.makeInteractive(main, () => {
     if (options.selectionMode && ticket.frontier) {
       options.select(ticket);
       return;

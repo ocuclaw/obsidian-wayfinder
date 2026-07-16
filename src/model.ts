@@ -26,13 +26,20 @@ export interface RawIssue {
   updated_at: string;
 }
 
+export interface BlockerRef {
+  number: number;
+  state?: "open" | "closed";
+  repo?: string;
+}
+
 export interface DepEntry {
   updatedAt: string;
-  blockedBy: number[];
+  blockedBy: BlockerRef[];
   unverified?: true;
 }
 
 export interface Snapshot {
+  schemaVersion: 2;
   repo: string;
   fetchedAt: number;
   lastFullSync?: number;
@@ -47,8 +54,9 @@ export interface Ticket {
   type: TicketType;
   mode: Mode;
   parent: number | null;
+  blockers: BlockerRef[];
   blockedBy: number[];
-  openBlockers: number[];
+  openBlockers: BlockerRef[];
   unverified: boolean;
   frontier: boolean;
   downstreamImpact: number;
@@ -78,18 +86,32 @@ export interface Model {
 }
 
 const TYPES: TicketType[] = ["grilling", "research", "prototype", "task"];
+const TYPE_PRECEDENCE: ("map" | TicketType)[] = [
+  "map",
+  "grilling",
+  "research",
+  "prototype",
+  "task",
+];
 
 export function wayfinderType(labels: string[]): "map" | TicketType | null {
-  for (const l of labels) {
-    if (!l.startsWith("wayfinder:")) continue;
-    const t = l.slice("wayfinder:".length);
-    if (t === "map" || (TYPES as string[]).includes(t)) return t as "map" | TicketType;
-  }
-  return null;
+  return (
+    TYPE_PRECEDENCE.find((type) => labels.includes(`wayfinder:${type}`)) ?? null
+  );
+}
+
+export function hasConflictingLabels(labels: string[]): boolean {
+  const typeCount = TYPE_PRECEDENCE.filter((type) =>
+    labels.includes(`wayfinder:${type}`),
+  ).length;
+  return (
+    typeCount > 1 ||
+    (labels.includes("ready-for-agent") && labels.includes("ready-for-human"))
+  );
 }
 
 export function parentOf(body: string | null): number | null {
-  const m = body?.match(/part of #(\d+)/i);
+  const m = body?.match(/^\s*part of #(\d+)\s*$/im);
   return m ? parseInt(m[1], 10) : null;
 }
 
@@ -99,6 +121,10 @@ export function modeOf(type: TicketType, labels: string[]): Mode {
   if (labels.includes("ready-for-agent")) return "AFK";
   if (labels.includes("ready-for-human")) return "HITL";
   return "either";
+}
+
+export function blockerLabel(blocker: BlockerRef): string {
+  return `${blocker.repo ? `${blocker.repo}#` : "#"}${blocker.number}`;
 }
 
 /** The ticket body minus the "Part of #N" line — used for hover excerpts. */
@@ -121,14 +147,20 @@ export function buildModel(snap: Snapshot): Model {
     const type = wayfinderType(issue.labels);
     if (!type || type === "map") continue;
     const dep = snap.deps[String(issue.number)];
-    const blockedBy = dep?.blockedBy ?? [];
-    const openBlockers = blockedBy.filter((n) => byNumber.get(n)?.state === "open");
+    const blockers = dep?.blockedBy ?? [];
+    const blockedBy = blockers.filter((ref) => !ref.repo).map((ref) => ref.number);
+    const openBlockers = blockers.filter((ref) => {
+      const localIssue = ref.repo ? undefined : byNumber.get(ref.number);
+      if (localIssue) return localIssue.state === "open";
+      return ref.state !== "closed";
+    });
     const unverified = dep?.unverified === true;
     tickets.push({
       issue,
       type,
-      mode: modeOf(type, issue.labels),
+      mode: hasConflictingLabels(issue.labels) ? "HITL" : modeOf(type, issue.labels),
       parent: snap.parents?.[String(issue.number)] ?? parentOf(issue.body),
+      blockers,
       blockedBy,
       openBlockers,
       unverified,

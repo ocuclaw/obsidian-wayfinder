@@ -63,7 +63,7 @@ export class WayfinderSettingTab extends PluginSettingTab {
         button.setButtonText("Test connection").onClick(async () => {
           try {
             const fullName = await this.plugin.testConnection();
-            new Notice(`Connected: ${fullName} (issues readable)`);
+            new Notice(`Connected: ${fullName} — issues readable`);
           } catch (e) {
             new Notice(e instanceof Error ? e.message : String(e));
           }

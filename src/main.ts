@@ -9,6 +9,11 @@ interface PersistedData {
   snapshot: Snapshot | null;
 }
 
+export type TakeableVerification =
+  | { status: "ok" }
+  | { status: "unverifiable" }
+  | { status: "lost"; warning: string };
+
 const obsidianHttp: Http = async (url, headers) => {
   const res = await requestUrl({ url, headers, throw: false });
   return {
@@ -61,12 +66,11 @@ export default class WayfinderPlugin extends Plugin {
   }
 
   /** Live-check an open, unclaimed ticket right before acting on it. */
-  async guardedAction(issueNumber: number, action: () => void): Promise<void> {
+  async verifyTakeable(issueNumber: number): Promise<TakeableVerification> {
     const snap = this.snapshot;
     const cached = snap?.issues.find((i) => i.number === issueNumber);
     if (!snap || !cached || cached.state !== "open" || cached.assignees.length > 0) {
-      action();
-      return;
+      return { status: "ok" };
     }
     let fresh: RawIssue | null;
     try {
@@ -75,14 +79,10 @@ export default class WayfinderPlugin extends Plugin {
         new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 2000)),
       ]);
     } catch {
-      new Notice(`Couldn't verify #${issueNumber} is still takeable — proceeding`);
-      action();
-      return;
+      return { status: "unverifiable" };
     }
     if (!fresh) {
-      new Notice(`Couldn't verify #${issueNumber} is still takeable — proceeding`);
-      action();
-      return;
+      return { status: "unverifiable" };
     }
     let warning: string | null = null;
     if (fresh.state === "closed") {
@@ -93,10 +93,31 @@ export default class WayfinderPlugin extends Plugin {
     if (warning) {
       snap.issues[snap.issues.indexOf(cached)] = fresh;
       this.events.trigger("wayfinder:updated");
-      new Notice(`⚠ ${warning}`, 6000);
+      return { status: "lost", warning };
+    }
+    return { status: "ok" };
+  }
+
+  async guardedAction(issueNumber: number, action: () => void): Promise<void> {
+    const result = await this.verifyTakeable(issueNumber);
+    if (result.status === "ok") {
+      action();
       return;
     }
-    action();
+    if (result.status === "lost") {
+      new Notice(`⚠ ${result.warning}`, 6000);
+      return;
+    }
+
+    const message = document.createDocumentFragment();
+    message.appendText(`Couldn't verify #${issueNumber} is still takeable. `);
+    const override = message.createEl("button", { text: "Copy anyway", cls: "wf-notice-btn" });
+    let notice: Notice;
+    override.addEventListener("click", () => {
+      action();
+      notice.hide();
+    });
+    notice = new Notice(message, 8000);
   }
 
   /** Copy the /wayfinder command for the newest frontier ticket. */
@@ -134,8 +155,8 @@ export default class WayfinderPlugin extends Plugin {
     const loadedSnapshot = data.snapshot ?? null;
     this.snapshot =
       loadedSnapshot &&
-      ((loadedSnapshot as Partial<Snapshot>).repo === undefined ||
-        loadedSnapshot.repo === this.settings.repo)
+      loadedSnapshot.schemaVersion === 2 &&
+      loadedSnapshot.repo === this.settings.repo
         ? loadedSnapshot
         : null;
 
@@ -224,13 +245,23 @@ export default class WayfinderPlugin extends Plugin {
 
   /** Persist settings and, once edits settle, try a sync with the new values. */
   async saveSettings(): Promise<void> {
+    const repoChanged = this.snapshot !== null && this.snapshot.repo !== this.settings.repo;
+    if (repoChanged) this.snapshot = null;
     await this.persist();
+    if (repoChanged) this.events.trigger("wayfinder:updated");
     this.events.trigger("wayfinder:settings");
     if (this.settingsSyncTimer !== null) window.clearTimeout(this.settingsSyncTimer);
     this.settingsSyncTimer = window.setTimeout(() => {
       this.settingsSyncTimer = null;
       if (this.settings.token && this.settings.repo.includes("/")) void this.sync(true);
     }, 800);
+  }
+
+  onunload(): void {
+    if (this.settingsSyncTimer !== null) {
+      window.clearTimeout(this.settingsSyncTimer);
+      this.settingsSyncTimer = null;
+    }
   }
 
   private async persist(): Promise<void> {

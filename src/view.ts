@@ -4,6 +4,7 @@ import { HoverCards, relativeTime } from "./hover";
 import { renderList } from "./list";
 import type { RawIssue } from "./model";
 import type WayfinderPlugin from "./main";
+import type { TakeableVerification } from "./main";
 import { TicketModal } from "./modal";
 import { buildModel, type MapTree, type Model, type Ticket } from "./model";
 import { renderToolbar, type ViewMode } from "./toolbar";
@@ -347,27 +348,22 @@ export class WayfinderView extends ItemView {
     const commands = bar.createEl("button", { text: "Copy commands", cls: "mod-cta" });
     commands.disabled = selected.length === 0;
     commands.addEventListener("click", () => {
-      const text = selected
-        .map((ticket) => this.plugin.settings.copyTemplate.replace("{url}", ticket.issue.html_url))
-        .join("\n");
-      void navigator.clipboard.writeText(text).then(
-        () => new Notice(`Copied ${selected.length} commands`),
-        () => new Notice("Copy failed — clipboard unavailable"),
+      void this.preflightAndCopy(
+        selected,
+        [commands, checklist],
+        (ticket) =>
+          this.plugin.settings.copyTemplate.replace("{url}", ticket.issue.html_url),
       );
     });
 
     const checklist = bar.createEl("button", { text: "Copy checklist" });
     checklist.disabled = selected.length === 0;
     checklist.addEventListener("click", () => {
-      const text = selected
-        .map(
-          (ticket) =>
-            `- [ ] /wayfinder ${ticket.issue.html_url} — #${ticket.issue.number} ${ticket.issue.title} (${ticket.type}, ${ticket.mode})`,
-        )
-        .join("\n");
-      void navigator.clipboard.writeText(text).then(
-        () => new Notice(`Copied checklist (${selected.length} tickets)`),
-        () => new Notice("Copy failed — clipboard unavailable"),
+      void this.preflightAndCopy(
+        selected,
+        [commands, checklist],
+        (ticket) =>
+          `- [ ] /wayfinder ${ticket.issue.html_url} — #${ticket.issue.number} ${ticket.issue.title} (${ticket.type}, ${ticket.mode})`,
       );
     });
 
@@ -381,6 +377,56 @@ export class WayfinderView extends ItemView {
     const done = bar.createEl("button", { text: "Done" });
     done.addEventListener("click", () => this.toggleSelectionMode());
     this.positionSelectBar();
+  }
+
+  private async preflightAndCopy(
+    selected: Ticket[],
+    buttons: HTMLButtonElement[],
+    lineFor: (ticket: Ticket) => string,
+  ): Promise<void> {
+    for (const button of buttons) button.disabled = true;
+    try {
+      const results: { ticket: Ticket; result: TakeableVerification }[] = new Array(
+        selected.length,
+      );
+      let next = 0;
+      const workers = Array.from({ length: Math.min(5, selected.length) }, async () => {
+        for (let index = next++; index < selected.length; index = next++) {
+          const ticket = selected[index];
+          results[index] = {
+            ticket,
+            result: await this.plugin.verifyTakeable(ticket.issue.number),
+          };
+        }
+      });
+      await Promise.all(workers);
+
+      const verified = results.filter(({ result }) => result.status === "ok");
+      const excluded = results
+        .filter(({ result }) => result.status !== "ok")
+        .map(({ ticket, result }) => {
+          const reason =
+            result.status === "lost"
+              ? result.warning
+                  .replace(/^#\d+ was /, "")
+                  .replace(/ since the last sync$/, "")
+              : "couldn't verify";
+          return `#${ticket.issue.number} (${reason})`;
+        });
+      const suffix = excluded.length > 0 ? ` · excluded ${excluded.join(", ")}` : "";
+      if (verified.length === 0) {
+        new Notice(`Nothing copied${suffix}`);
+        return;
+      }
+
+      const text = verified.map(({ ticket }) => lineFor(ticket)).join("\n");
+      await navigator.clipboard.writeText(text).then(
+        () => new Notice(`Copied ${verified.length}${suffix}`),
+        () => new Notice("Copy failed — clipboard unavailable"),
+      );
+    } finally {
+      for (const button of buttons) button.disabled = selected.length === 0;
+    }
   }
 
   private positionSelectBar(): void {
@@ -402,13 +448,15 @@ export class WayfinderView extends ItemView {
     });
     for (const t of orphans) {
       const row = box.createDiv({ cls: "wf-orphan-row" });
-      row.createSpan({ cls: "wf-num", text: `#${t.issue.number}` });
-      row.createSpan({ text: t.issue.title });
-      row.createSpan({
+      const main = row.createDiv({ cls: "wf-card-main wf-orphan-main" });
+      main.setAttr("aria-label", `#${t.issue.number} ${t.issue.title}`);
+      main.createSpan({ cls: "wf-num", text: `#${t.issue.number}` });
+      main.createSpan({ text: t.issue.title });
+      main.createSpan({
         cls: "wf-orphan-why",
         text: t.parent === null ? "no “Part of #N” line" : `parent #${t.parent} is not a map`,
       });
-      this.makeInteractive(row, () => new TicketModal(this.app, this.plugin, t, null).open());
+      this.makeInteractive(main, () => new TicketModal(this.app, this.plugin, t, null).open());
     }
   }
 
@@ -432,7 +480,8 @@ export class WayfinderView extends ItemView {
       this.render();
     });
 
-    const headMain = head.createDiv({ cls: "wf-mapcard-main" });
+    const headMain = head.createDiv({ cls: "wf-card-main wf-mapcard-main" });
+    headMain.setAttr("aria-label", `#${map.issue.number} ${map.issue.title}`);
     const row1 = headMain.createDiv({ cls: "wf-row1" });
     row1.createSpan({ cls: "wf-num", text: `#${map.issue.number}` });
     row1.createSpan({ cls: "wf-type wf-type-map", text: "map" });
@@ -471,7 +520,7 @@ export class WayfinderView extends ItemView {
     addIconActions(head, map.issue, this.plugin, () =>
       new TicketModal(this.app, this.plugin, null, map).open(),
     );
-    this.makeInteractive(head, () => {
+    this.makeInteractive(headMain, () => {
       this.collapsedOverride.set(map.issue.number, expanded);
       this.render();
     });

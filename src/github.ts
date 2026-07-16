@@ -3,7 +3,7 @@
  * Obsidian's CORS-exempt requestUrl while tests use plain fetch.
  */
 
-import type { DepEntry, RawIssue, Snapshot } from "./model";
+import type { BlockerRef, DepEntry, RawIssue, Snapshot } from "./model";
 import { wayfinderType } from "./model";
 
 export interface HttpResponse {
@@ -21,7 +21,11 @@ export interface GitHubConfig {
 
 const API = "https://api.github.com";
 
-export function classifyError(status: number, headers: Record<string, string>): string {
+export function classifyError(
+  status: number,
+  headers: Record<string, string>,
+  message?: string,
+): string {
   if (status === 401) {
     return "GitHub token is invalid or expired — replace it in Settings → Wayfinder.";
   }
@@ -34,6 +38,18 @@ export function classifyError(status: number, headers: Record<string, string>): 
       ? new Date(resetSeconds * 1000).toLocaleString()
       : "an unknown time";
     return `GitHub rate limit hit — resets at ${resetTime}.`;
+  }
+  if (status === 429) {
+    return "GitHub is rate limiting requests — retry shortly.";
+  }
+  if (
+    status === 403 &&
+    (headers["retry-after"] !== undefined || /secondary rate limit|abuse/i.test(message ?? ""))
+  ) {
+    const retryAfter = headers["retry-after"]?.trim();
+    return retryAfter
+      ? `GitHub is rate limiting requests — retry in ${retryAfter}s.`
+      : "GitHub is rate limiting requests — retry shortly.";
   }
   if (status === 403) {
     return "Token lacks permission for this repo (needs read-only Issues).";
@@ -79,7 +95,7 @@ export class GitHubClient {
     for (let page = 1; page <= 50; page++) {
       const res = await this.get(`/issues?state=all&per_page=100&page=${page}`);
       if (res.status !== 200) {
-        throw new Error(classifyError(res.status, res.headers));
+        throw new Error(classifyError(res.status, res.headers, responseMessage(res.json)));
       }
       const batch = res.json as Record<string, unknown>[];
       for (const raw of batch) {
@@ -94,8 +110,17 @@ export class GitHubClient {
 
   async testConnection(): Promise<string> {
     const res = await this.get("");
-    if (res.status !== 200) throw new Error(classifyError(res.status, res.headers));
-    return (res.json as { full_name: string }).full_name;
+    if (res.status !== 200) {
+      throw new Error(classifyError(res.status, res.headers, responseMessage(res.json)));
+    }
+    const fullName = (res.json as { full_name: string }).full_name;
+    const issues = await this.get("/issues?state=all&per_page=1");
+    if (issues.status !== 200) {
+      throw new Error(
+        classifyError(issues.status, issues.headers, responseMessage(issues.json)),
+      );
+    }
+    return fullName;
   }
 
   /** Fetch a single issue fresh — used for pre-action claim checks. */
@@ -105,19 +130,35 @@ export class GitHubClient {
     return toRawIssue(res.json as Record<string, unknown>);
   }
 
-  async blockedBy(issueNumber: number): Promise<number[] | null> {
-    const issues: number[] = [];
+  async blockedBy(issueNumber: number): Promise<BlockerRef[] | null> {
+    const issues: BlockerRef[] = [];
     for (let page = 1; page <= 10; page++) {
       const res = await this.get(
         `/issues/${issueNumber}/dependencies/blocked_by?per_page=100&page=${page}`,
       );
       if (res.status === 404) return [];
       if (res.status !== 200) {
-        this.dependencyErrorMessage ??= classifyError(res.status, res.headers);
+        this.dependencyErrorMessage ??= classifyError(
+          res.status,
+          res.headers,
+          responseMessage(res.json),
+        );
         return null;
       }
-      const batch = res.json as { number: number }[];
-      issues.push(...batch.map((i) => i.number));
+      const batch = res.json as {
+        number: number;
+        state?: string;
+        repository?: { full_name?: string } | null;
+      }[];
+      issues.push(
+        ...batch.map((issue) => {
+          const ref: BlockerRef = { number: issue.number };
+          if (issue.state === "open" || issue.state === "closed") ref.state = issue.state;
+          const repo = issue.repository?.full_name;
+          if (repo && repo !== this.repo) ref.repo = repo;
+          return ref;
+        }),
+      );
       if (batch.length < 100) break;
     }
     return issues;
@@ -127,7 +168,7 @@ export class GitHubClient {
     const issues: number[] = [];
     for (let page = 1; page <= 10; page++) {
       const res = await this.get(`/issues/${issueNumber}/sub_issues?per_page=100&page=${page}`);
-      if (res.status === 404) return [];
+      if (res.status === 404) return null;
       if (res.status !== 200) return null;
       const batch = res.json as { number: number }[];
       issues.push(...batch.map((i) => i.number));
@@ -140,7 +181,9 @@ export class GitHubClient {
     const comments: IssueComment[] = [];
     for (let page = 1; page <= 10; page++) {
       const res = await this.get(`/issues/${issueNumber}/comments?per_page=100&page=${page}`);
-      if (res.status !== 200) throw new Error(classifyError(res.status, res.headers));
+      if (res.status !== 200) {
+        throw new Error(classifyError(res.status, res.headers, responseMessage(res.json)));
+      }
       const batch = res.json as Record<string, unknown>[];
       comments.push(
         ...batch.map((c) => ({
@@ -182,6 +225,12 @@ function toRawIssue(raw: Record<string, unknown>): RawIssue {
   };
 }
 
+function responseMessage(json: unknown): string | undefined {
+  if (!json || typeof json !== "object" || !("message" in json)) return undefined;
+  const message = (json as { message?: unknown }).message;
+  return typeof message === "string" ? message : undefined;
+}
+
 /**
  * Fetch a full snapshot. Dependency lookups are the expensive part (one
  * request per ticket), so entries are reused from `prev` when the issue's
@@ -204,9 +253,11 @@ export async function fetchSnapshot(
   // the body is only a fallback). One request per map — always fresh.
   const parents: Record<string, number> = {};
   const maps = issues.filter((i) => wayfinderType(i.labels) === "map");
+  let subIssueFailures = 0;
   for (const map of maps) {
     const children = await gh.subIssues(map.number);
     if (children === null) {
+      subIssueFailures++;
       for (const [child, parent] of Object.entries(prev?.parents ?? {})) {
         if (parent === map.number) parents[child] = parent;
       }
@@ -216,11 +267,16 @@ export async function fetchSnapshot(
       parents[String(child)] = map.number;
     }
   }
+  if (subIssueFailures > 0) {
+    onWarning?.(
+      `Couldn't refresh sub-issues for ${subIssueFailures} map(s) — tree structure may be stale`,
+    );
+  }
 
   const deps: Record<string, DepEntry> = {};
   const stale = targets.filter((i) => {
     const prevDep = prev?.deps[String(i.number)];
-    if (!full && prevDep && prevDep.updatedAt === i.updated_at) {
+    if (!full && prevDep && !prevDep.unverified && prevDep.updatedAt === i.updated_at) {
       deps[String(i.number)] = prevDep;
       return false;
     }
@@ -238,19 +294,24 @@ export async function fetchSnapshot(
       if (blockedBy === null) dependencyFailures++;
       deps[key] =
         blockedBy === null
-          ? (prev?.deps[key] ?? { updatedAt: "", blockedBy: [], unverified: true })
+          ? { ...(prev?.deps[key] ?? { updatedAt: "", blockedBy: [] }), unverified: true }
           : { updatedAt: issue.updated_at, blockedBy };
     }
   });
   await Promise.all(workers);
 
-  if (stale.length > 0 && dependencyFailures === stale.length) {
+  if (dependencyFailures > 0) {
     const message = gh.dependencyError();
-    if (message) onWarning?.(message);
+    onWarning?.(
+      `Couldn't verify blockers for ${dependencyFailures} ticket(s) — shown as unverified${
+        message ? ` (${message})` : ""
+      }`,
+    );
   }
 
   const fetchedAt = Date.now();
   return {
+    schemaVersion: 2,
     repo: gh.repo,
     fetchedAt,
     lastFullSync: full || !prev ? fetchedAt : prev.lastFullSync,

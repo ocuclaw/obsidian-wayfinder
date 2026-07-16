@@ -86,7 +86,8 @@ body.theme-light .wayfinder-view {
   padding: 0.5rem 0.7rem; margin-bottom: 1rem; font-size: 0.82em;
 }
 .wf-orphans-title { font-weight: 600; color: var(--wf-orphan); margin-bottom: 0.3rem; }
-.wf-orphan-row { display: flex; gap: 0.5rem; padding: 0.15rem 0; cursor: pointer; align-items: baseline; }
+.wf-orphan-row { padding: 0.15rem 0; cursor: pointer; }
+.wf-orphan-main { display: flex; gap: 0.5rem; align-items: baseline; width: 100%; }
 .wf-orphan-row:hover { color: var(--text-normal); }
 .wf-orphan-why { color: var(--text-faint); margin-left: auto; font-size: 0.9em; }
 
@@ -137,6 +138,9 @@ body.theme-light .wayfinder-view {
   border-left: 3px solid var(--tc, var(--text-faint));
   border-radius: 7px; padding: 0.45rem 0.55rem 0.5rem;
   display: flex; flex-direction: column; gap: 0.28rem; cursor: pointer;
+}
+.wf-ticket > .wf-card-main {
+  display: flex; flex-direction: column; gap: 0.28rem;
 }
 .wf-ticket:hover { border-color: var(--tc); }
 .wf-row1 { display: flex; align-items: center; gap: 0.35rem; }
@@ -225,7 +229,7 @@ body.theme-light .wayfinder-view {
 @media (prefers-reduced-motion: reduce) {
   .wf-changed { animation: none; }
 }
-.wf-ticket:focus-visible, .wf-mapcard:focus-visible, .wf-orphan-row:focus-visible {
+.wf-card-main:focus-visible {
   outline: 2px solid var(--interactive-accent); outline-offset: 1px;
 }
 
@@ -264,6 +268,15 @@ body.theme-light .wayfinder-view {
   padding: 0.5rem 0.8rem;
 }
 .wf-select-count { font-size: 0.82em; font-weight: 600; margin-right: 0.2rem; }
+.wf-notice-btn {
+  display: inline-flex; align-items: center; margin-left: 0.35rem;
+  padding: 0.18rem 0.42rem; min-height: 0; height: auto;
+  font-size: 0.82em; line-height: 1.2; cursor: pointer;
+  color: var(--text-normal); background: var(--background-modifier-hover);
+  border: 1px solid var(--background-modifier-border); border-radius: 4px;
+  box-shadow: none;
+}
+.wf-notice-btn:hover { background: var(--background-modifier-active-hover); }
 @media (prefers-reduced-motion: no-preference) {
   .wf-frontier { animation: wf-breathe 2.6s ease-in-out infinite; }
   @keyframes wf-breathe {

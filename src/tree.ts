@@ -44,7 +44,8 @@ function drawEdges(tree: HTMLElement, snapshot: Snapshot | null): void {
     const dependency = snapshot.deps[String(number)];
     if (!dependency) continue;
     for (const blocker of dependency.blockedBy) {
-      const from = cards.get(blocker);
+      if (blocker.repo) continue;
+      const from = cards.get(blocker.number);
       if (!from) continue;
       drawEdge(svg, treeRect, from, card);
     }

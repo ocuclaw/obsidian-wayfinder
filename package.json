@@ -1,6 +1,6 @@
 {
   "name": "obsidian-wayfinder",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Visualize wayfinder maps from GitHub issues inside Obsidian",
   "main": "main.js",
   "type": "module",
