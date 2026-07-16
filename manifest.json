@@ -1,7 +1,7 @@
 {
   "id": "wayfinder",
   "name": "Wayfinder",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "1.4.0",
   "description": "Visualizes wayfinder maps from GitHub issues: dependency-layered ticket trees, frontier highlighting, type tallies, and one-click /wayfinder command copying.",
   "author": "ocuclaw",

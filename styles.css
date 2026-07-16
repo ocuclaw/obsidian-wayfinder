@@ -187,6 +187,19 @@
   padding: 0.1rem 0 0.1rem 0.7rem; margin-bottom: 0.7rem; font-size: 0.88em;
 }
 .wf-comment-meta { font-size: 0.78em; color: var(--text-faint); margin-bottom: 0.15rem; }
+.wf-blocker-link { margin-right: 0.55em; }
+
+/* ── change flash + keyboard focus ── */
+@keyframes wf-flash {
+  from { background: color-mix(in srgb, var(--tc, var(--wf-map)) 28%, var(--background-secondary)); }
+}
+.wf-changed { animation: wf-flash 2.5s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .wf-changed { animation: none; }
+}
+.wf-ticket:focus-visible, .wf-mapcard:focus-visible, .wf-orphan-row:focus-visible {
+  outline: 2px solid var(--interactive-accent); outline-offset: 1px;
+}
 
 .wf-closed { opacity: 0.5; }
 .wf-closed .wf-ticket-title { text-decoration: line-through; text-decoration-color: var(--text-faint); }

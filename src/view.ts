@@ -70,12 +70,21 @@ export class WayfinderView extends ItemView {
   private pollTimer: number | null = null;
   private lastRenderKey: string | null = null;
   private edgeRaf = 0;
+  /** updated_at per issue as of the previous render — drives change flashes. */
+  private prevUpdated: Map<number, string> | null = null;
 
   async onOpen(): Promise<void> {
     this.registerEvent(this.plugin.events.on("wayfinder:updated", () => this.onDataUpdated()));
     this.registerEvent(this.plugin.events.on("wayfinder:settings", () => this.startPolling()));
     this.startPolling();
     this.registerZoomGestures();
+    // Coming back from sleep/background: sync immediately if data is stale.
+    this.registerDomEvent(window, "focus", () => {
+      const age = Date.now() - (this.plugin.snapshot?.fetchedAt ?? 0);
+      if (age > Math.max(0.5, this.plugin.settings.pollIntervalMinutes) * 60_000) {
+        void this.plugin.sync(false);
+      }
+    });
     this.render();
     void this.plugin.sync(false);
   }
@@ -168,7 +177,11 @@ export class WayfinderView extends ItemView {
     const s = this.plugin.snapshot;
     if (!s) return "";
     const open = s.issues.filter((i) => i.state === "open").length;
-    const when = this.plugin.syncing ? "syncing…" : `synced ${relativeTime(s.fetchedAt)}`;
+    const age = Date.now() - s.fetchedAt;
+    const staleAfter = Math.max(0.5, this.plugin.settings.pollIntervalMinutes) * 3 * 60_000;
+    const when = this.plugin.syncing
+      ? "syncing…"
+      : `synced ${relativeTime(s.fetchedAt)}${age > staleAfter ? " (stale)" : ""}`;
     return `${s.issues.length} issues · ${open} open · ${when}`;
   }
 
@@ -180,6 +193,19 @@ export class WayfinderView extends ItemView {
   private scheduleEdges(): void {
     cancelAnimationFrame(this.edgeRaf);
     this.edgeRaf = requestAnimationFrame(() => this.drawAllEdges());
+  }
+
+  /** Make a card keyboard-operable: tabbable, Enter/Space activates. */
+  private makeInteractive(el: HTMLElement, activate: () => void): void {
+    el.setAttr("tabindex", "0");
+    el.setAttr("role", "button");
+    el.addEventListener("click", activate);
+    el.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        activate();
+      }
+    });
   }
 
   private render(): void {
@@ -221,8 +247,15 @@ export class WayfinderView extends ItemView {
     for (const map of model.maps) this.renderMap(zoomWrap, map);
 
     root.scrollTop = scrollTop;
+    this.prevUpdated = new Map(snapshot.issues.map((i) => [i.number, i.updated_at]));
     // Edges need final geometry — draw after layout settles.
     this.scheduleEdges();
+  }
+
+  /** True when this issue is new or changed since the previous render. */
+  private changedSinceLastRender(issue: RawIssue): boolean {
+    if (!this.prevUpdated) return false; // first render — nothing to compare
+    return this.prevUpdated.get(issue.number) !== issue.updated_at;
   }
 
   // ── tally bar ────────────────────────────────────────────────────────────
@@ -249,6 +282,19 @@ export class WayfinderView extends ItemView {
 
     const right = bar.createDiv({ cls: "wf-tally-right" });
     right.createSpan({ cls: "wf-sync-status", text: this.syncStatusText() });
+    const anyExpanded = model.maps.some(
+      (m) => !(this.collapsedOverride.get(m.issue.number) ?? m.issue.state === "closed"),
+    );
+    const foldBtn = right.createEl("button", {
+      cls: "wf-refresh",
+      attr: { "aria-label": anyExpanded ? "Collapse all maps" : "Expand all maps" },
+    });
+    setIcon(foldBtn, anyExpanded ? "chevrons-down-up" : "chevrons-up-down");
+    foldBtn.addEventListener("click", () => {
+      for (const m of model.maps) this.collapsedOverride.set(m.issue.number, anyExpanded);
+      this.render();
+    });
+
     const zoomOut = right.createEl("button", {
       cls: "wf-refresh",
       attr: { "aria-label": "Zoom out" },
@@ -298,9 +344,7 @@ export class WayfinderView extends ItemView {
         cls: "wf-orphan-why",
         text: t.parent === null ? "no “Part of #N” line" : `parent #${t.parent} is not a map`,
       });
-      row.addEventListener("click", () =>
-        new TicketModal(this.app, this.plugin, t, null).open(),
-      );
+      this.makeInteractive(row, () => new TicketModal(this.app, this.plugin, t, null).open());
     }
   }
 
@@ -338,10 +382,11 @@ export class WayfinderView extends ItemView {
       attr: { style: `width:${map.total ? Math.round((map.resolved / map.total) * 100) : 0}%` },
     });
 
+    if (this.changedSinceLastRender(map.issue)) head.addClass("wf-changed");
     this.addIconActions(head, map.issue, () =>
       new TicketModal(this.app, this.plugin, null, map).open(),
     );
-    head.addEventListener("click", () => {
+    this.makeInteractive(head, () => {
       this.collapsedOverride.set(map.issue.number, expanded);
       this.render();
     });
@@ -490,8 +535,9 @@ export class WayfinderView extends ItemView {
       meta.setText("● open · takeable now");
     }
 
+    if (this.changedSinceLastRender(t.issue)) card.addClass("wf-changed");
     this.addIconActions(card, t.issue, undefined, t.frontier);
-    card.addEventListener("click", () => new TicketModal(this.app, this.plugin, t, map).open());
+    this.makeInteractive(card, () => new TicketModal(this.app, this.plugin, t, map).open());
     this.attachHover(card, t, map);
   }
 

@@ -1,6 +1,6 @@
 import { Events, Notice, Plugin, WorkspaceLeaf, requestUrl } from "obsidian";
 import { GitHubClient, fetchSnapshot, type Http, type IssueComment } from "./github";
-import type { Snapshot } from "./model";
+import { buildModel, type Snapshot } from "./model";
 import { DEFAULT_SETTINGS, WayfinderSettingTab, type WayfinderSettings } from "./settings";
 import { VIEW_TYPE_WAYFINDER, WayfinderView } from "./view";
 
@@ -61,6 +61,25 @@ export default class WayfinderPlugin extends Plugin {
     }
   }
 
+  /** Copy the /wayfinder command for the newest frontier ticket. */
+  copyNextTakeable(): void {
+    if (!this.snapshot) {
+      new Notice("Wayfinder: no data yet — open the view to sync first.");
+      return;
+    }
+    const model = buildModel(this.snapshot);
+    for (const map of model.maps) {
+      const frontier = map.tickets.filter((t) => t.frontier);
+      if (frontier.length > 0) {
+        const pick = frontier[0];
+        this.copyCommand(pick.issue.html_url);
+        new Notice(`Next takeable: #${pick.issue.number} ${pick.issue.title}`);
+        return;
+      }
+    }
+    new Notice("Wayfinder: no takeable tickets right now.");
+  }
+
   copyCommand(url: string): void {
     const text = this.settings.copyTemplate.replace("{url}", url);
     void navigator.clipboard.writeText(text).then(
@@ -85,6 +104,11 @@ export default class WayfinderPlugin extends Plugin {
       id: "sync",
       name: "Sync now",
       callback: () => this.sync(true),
+    });
+    this.addCommand({
+      id: "copy-next-takeable",
+      name: "Copy /wayfinder for the next takeable ticket",
+      callback: () => this.copyNextTakeable(),
     });
     this.addSettingTab(new WayfinderSettingTab(this.app, this));
   }

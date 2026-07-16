@@ -57,12 +57,15 @@ export class TicketModal extends Modal {
 
     if (this.ticket && this.ticket.blockedBy.length > 0) {
       const openSet = new Set(this.ticket.openBlockers);
-      contentEl.createDiv({
-        cls: "wf-hc-kv",
-        text: `Blocked by: ${this.ticket.blockedBy
-          .map((n) => (openSet.has(n) ? `#${n} (open)` : `#${n} ✓`))
-          .join("  ")}`,
-      });
+      const kv = contentEl.createDiv({ cls: "wf-hc-kv" });
+      kv.createSpan({ text: "Blocked by: " });
+      for (const n of this.ticket.blockedBy) {
+        kv.createEl("a", {
+          text: openSet.has(n) ? `#${n} (open)` : `#${n} ✓`,
+          href: `https://github.com/${this.plugin.settings.repo}/issues/${n}`,
+          cls: "wf-blocker-link",
+        });
+      }
     }
     contentEl.createDiv({
       cls: "wf-hc-kv",
