@@ -1,8 +1,8 @@
 {
   "id": "wayfinder-maps",
   "name": "Wayfinder Maps",
-  "version": "1.0.0",
-  "minAppVersion": "1.4.0",
+  "version": "1.0.1",
+  "minAppVersion": "1.13.0",
   "description": "Visualizes wayfinder maps (from Matt Pocock's skills workflow) as dependency-layered ticket trees from GitHub issues, with frontier highlighting and one-click /wayfinder command copying.",
   "author": "ocuclaw",
   "isDesktopOnly": false

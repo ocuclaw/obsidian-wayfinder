@@ -53,7 +53,7 @@ export class WayfinderView extends ItemView {
     const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100));
     window.localStorage.setItem(ZOOM_KEY, String(clamped));
     const wrap = this.contentEl.querySelector<HTMLElement>(".wf-zoom");
-    if (wrap) wrap.style.setProperty("zoom", String(clamped));
+    if (wrap) wrap.setCssStyles({ zoom: String(clamped) });
     const label = this.contentEl.querySelector<HTMLElement>(".wf-zoom-label");
     if (label) label.setText(`${Math.round(clamped * 100)}%`);
     this.scheduleEdges();
@@ -154,7 +154,7 @@ export class WayfinderView extends ItemView {
 
   async onClose(): Promise<void> {
     if (this.pollTimer !== null) window.clearInterval(this.pollTimer);
-    cancelAnimationFrame(this.edgeRaf);
+    window.cancelAnimationFrame(this.edgeRaf);
     this.hoverCards.clear();
     this.resizeObserver?.disconnect();
   }
@@ -284,8 +284,8 @@ export class WayfinderView extends ItemView {
   }
 
   private scheduleEdges(): void {
-    cancelAnimationFrame(this.edgeRaf);
-    this.edgeRaf = requestAnimationFrame(() =>
+    window.cancelAnimationFrame(this.edgeRaf);
+    this.edgeRaf = window.requestAnimationFrame(() =>
       drawAllEdges(this.contentEl, this.plugin.snapshots),
     );
   }
@@ -371,7 +371,7 @@ export class WayfinderView extends ItemView {
     }
     for (const error of this.errorLines()) root.createDiv({ text: error, cls: "wf-error" });
     const zoomWrap = root.createDiv({ cls: "wf-zoom" });
-    zoomWrap.style.setProperty("zoom", String(this.zoom));
+    zoomWrap.setCssStyles({ zoom: String(this.zoom) });
     if (model.orphans.length > 0) this.renderOrphans(zoomWrap, model.orphans);
     for (const map of model.maps) this.renderMap(zoomWrap, map);
     if (this.selectionMode) this.renderSelectBar(root, model);
@@ -522,9 +522,7 @@ export class WayfinderView extends ItemView {
   ): Promise<void> {
     for (const button of buttons) button.disabled = true;
     try {
-      const results: { ticket: Ticket; result: TakeableVerification }[] = new Array(
-        selected.length,
-      );
+      const results = new Array<{ ticket: Ticket; result: TakeableVerification }>(selected.length);
       let next = 0;
       const workers = Array.from({ length: Math.min(5, selected.length) }, async () => {
         for (let index = next++; index < selected.length; index = next++) {
@@ -569,9 +567,11 @@ export class WayfinderView extends ItemView {
     const bar = this.contentEl.querySelector<HTMLElement>(".wf-selectbar");
     if (!bar) return;
     const rect = this.contentEl.getBoundingClientRect();
-    bar.style.left = `${rect.left + rect.width / 2}px`;
-    bar.style.bottom = `${Math.max(8, window.innerHeight - rect.bottom + 12)}px`;
-    bar.style.maxWidth = `${Math.max(0, rect.width - 32)}px`;
+    bar.setCssStyles({
+      left: `${rect.left + rect.width / 2}px`,
+      bottom: `${Math.max(8, window.innerHeight - rect.bottom + 12)}px`,
+      maxWidth: `${Math.max(0, rect.width - 32)}px`,
+    });
   }
 
   // ── orphans ──────────────────────────────────────────────────────────────
@@ -627,10 +627,8 @@ export class WayfinderView extends ItemView {
     const prog = headMain.createDiv({ cls: "wf-progress" });
     prog.createSpan({ text: `${map.resolved} / ${map.total} resolved` });
     const bar = prog.createDiv({ cls: "wf-bar" });
-    bar.createDiv({
-      cls: "wf-bar-fill",
-      attr: { style: `width:${map.total ? Math.round((map.resolved / map.total) * 100) : 0}%` },
-    });
+    const pct = map.total ? Math.round((map.resolved / map.total) * 100) : 0;
+    bar.createDiv({ cls: "wf-bar-fill" }).setCssStyles({ width: `${pct}%` });
     const openTickets = map.tickets.filter((ticket) => ticket.issue.state === "open");
     if (!isClosed && openTickets.length > 0) {
       const takeable = openTickets.filter((ticket) => ticket.frontier).length;

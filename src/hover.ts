@@ -64,11 +64,13 @@ export class HoverCards {
       });
 
       const rect = el.getBoundingClientRect();
-      card.style.left = `${Math.min(rect.left, window.innerWidth - 360)}px`;
-      card.style.top =
-        rect.bottom + 12 + card.offsetHeight < window.innerHeight
-          ? `${rect.bottom + 8}px`
-          : `${Math.max(8, rect.top - card.offsetHeight - 8)}px`;
+      card.setCssStyles({
+        left: `${Math.min(rect.left, window.innerWidth - 360)}px`,
+        top:
+          rect.bottom + 12 + card.offsetHeight < window.innerHeight
+            ? `${rect.bottom + 8}px`
+            : `${Math.max(8, rect.top - card.offsetHeight - 8)}px`,
+      });
     });
     el.addEventListener("mouseleave", () => this.clear());
   }

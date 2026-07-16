@@ -37,6 +37,7 @@ body.theme-light .wayfinder-view {
 .wf-empty { color: var(--text-muted); padding: 2rem 0.5rem; display: flex; flex-direction: column; gap: 0.8rem; align-items: flex-start; }
 .wf-sync-now { cursor: pointer; }
 .wf-error { color: var(--text-error); font-size: 0.85em; margin: 0.4rem 0; }
+.wf-token-input { width: 100%; }
 
 /* ── tally bar ── */
 .wf-tally {

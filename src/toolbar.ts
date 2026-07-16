@@ -10,14 +10,14 @@ export interface ToolbarControls {
   zoom: number;
   anyExpanded: boolean;
   repos: { repo: string; shown: boolean }[];
-  toggleSelectionMode(): void;
-  toggleAllMaps(anyExpanded: boolean): void;
-  setZoom(zoom: number): void;
-  adjustZoom(factor: number): void;
-  toggleMode(): void;
-  toggleRepo(repo: string): void;
-  showAllRepos(): void;
-  refresh(): void;
+  toggleSelectionMode: () => void;
+  toggleAllMaps: (anyExpanded: boolean) => void;
+  setZoom: (zoom: number) => void;
+  adjustZoom: (factor: number) => void;
+  toggleMode: () => void;
+  toggleRepo: (repo: string) => void;
+  showAllRepos: () => void;
+  refresh: () => void;
 }
 
 export function renderToolbar(

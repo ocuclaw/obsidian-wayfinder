@@ -101,7 +101,7 @@ export default class WayfinderPlugin extends Plugin {
       return;
     }
 
-    const message = document.createDocumentFragment();
+    const message = createFragment();
     message.appendText(`Couldn't verify #${issueNumber} is still takeable. `);
     const override = message.createEl("button", { text: overrideLabel, cls: "wf-notice-btn" });
     let notice: Notice;
@@ -194,7 +194,7 @@ export default class WayfinderPlugin extends Plugin {
       leaf = this.app.workspace.getLeaf(true);
       await leaf.setViewState({ type: VIEW_TYPE_WAYFINDER, active: true });
     }
-    if (leaf) this.app.workspace.revealLeaf(leaf);
+    if (leaf) await this.app.workspace.revealLeaf(leaf);
   }
 
   /** Sync from GitHub. `full` re-fetches every dependency edge. */

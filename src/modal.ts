@@ -1,4 +1,4 @@
-import { App, Component, MarkdownRenderer, Modal, setIcon } from "obsidian";
+import { App, Component, MarkdownRenderer, Modal } from "obsidian";
 import type WayfinderPlugin from "./main";
 import { blockerLabel, descriptionOf, type MapTree, type Ticket } from "./model";
 
@@ -61,12 +61,8 @@ export class TicketModal extends Modal {
       const prog = contentEl.createDiv({ cls: "wf-progress wf-modal-progress" });
       prog.createSpan({ text: `${map.resolved} / ${map.total} tickets resolved` });
       const bar = prog.createDiv({ cls: "wf-bar" });
-      bar.createDiv({
-        cls: "wf-bar-fill",
-        attr: {
-          style: `width:${map.total ? Math.round((map.resolved / map.total) * 100) : 0}%`,
-        },
-      });
+      const pct = map.total ? Math.round((map.resolved / map.total) * 100) : 0;
+      bar.createDiv({ cls: "wf-bar-fill" }).setCssStyles({ width: `${pct}%` });
     }
 
     if (this.ticket && this.ticket.blockers.length > 0) {
