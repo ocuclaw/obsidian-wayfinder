@@ -7,6 +7,11 @@
   --wf-map: #a371f7;
   padding: 0.75rem 1rem 2rem;
   overflow-y: auto;
+  touch-action: pan-x pan-y; /* leave panning native; pinch is ours */
+}
+.wf-zoom-label {
+  font-size: 0.72em; font-variant-numeric: tabular-nums;
+  color: var(--text-muted); min-width: 3.2em; justify-content: center;
 }
 
 .wf-t-grilling { --tc: var(--wf-grilling, #3fb950); }

@@ -14,6 +14,9 @@ export const VIEW_TYPE_WAYFINDER = "wayfinder-view";
 
 type ViewMode = "tree" | "list";
 const MODE_KEY = "wayfinder-view-mode";
+const ZOOM_KEY = "wayfinder-zoom";
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 2;
 
 export class WayfinderView extends ItemView {
   /** Per-map collapse override; default is expanded for open maps, collapsed for closed. */
@@ -28,6 +31,22 @@ export class WayfinderView extends ItemView {
 
   private set mode(m: ViewMode) {
     window.localStorage.setItem(MODE_KEY, m);
+  }
+
+  /** Per-device zoom factor for the map area (CSS zoom, so layout reflows). */
+  private get zoom(): number {
+    const v = parseFloat(window.localStorage.getItem(ZOOM_KEY) ?? "");
+    return Number.isFinite(v) ? Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v)) : 1;
+  }
+
+  private setZoom(z: number): void {
+    const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100));
+    window.localStorage.setItem(ZOOM_KEY, String(clamped));
+    const wrap = this.contentEl.querySelector<HTMLElement>(".wf-zoom");
+    if (wrap) wrap.style.setProperty("zoom", String(clamped));
+    const label = this.contentEl.querySelector<HTMLElement>(".wf-zoom-label");
+    if (label) label.setText(`${Math.round(clamped * 100)}%`);
+    this.scheduleEdges();
   }
   private hoverCard: HTMLElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
@@ -56,8 +75,54 @@ export class WayfinderView extends ItemView {
     this.registerEvent(this.plugin.events.on("wayfinder:updated", () => this.onDataUpdated()));
     this.registerEvent(this.plugin.events.on("wayfinder:settings", () => this.startPolling()));
     this.startPolling();
+    this.registerZoomGestures();
     this.render();
     void this.plugin.sync(false);
+  }
+
+  /** Ctrl/Cmd+wheel (also trackpad pinch) on desktop; two-finger pinch on touch. */
+  private registerZoomGestures(): void {
+    this.registerDomEvent(
+      this.contentEl,
+      "wheel",
+      (e: WheelEvent) => {
+        if (!e.ctrlKey && !e.metaKey) return;
+        e.preventDefault();
+        this.setZoom(this.zoom * (e.deltaY < 0 ? 1.08 : 1 / 1.08));
+      },
+      { passive: false },
+    );
+
+    const touches = new Map<number, { x: number; y: number }>();
+    let pinchBase: { dist: number; zoom: number } | null = null;
+    const dist = (): number => {
+      const [a, b] = [...touches.values()];
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    };
+    this.registerDomEvent(this.contentEl, "pointerdown", (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      pinchBase = touches.size === 2 ? { dist: dist(), zoom: this.zoom } : null;
+    });
+    this.registerDomEvent(
+      this.contentEl,
+      "pointermove",
+      (e: PointerEvent) => {
+        if (e.pointerType !== "touch" || !touches.has(e.pointerId)) return;
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinchBase && touches.size === 2) {
+          e.preventDefault();
+          this.setZoom((pinchBase.zoom * dist()) / pinchBase.dist);
+        }
+      },
+      { passive: false },
+    );
+    const endTouch = (e: PointerEvent): void => {
+      touches.delete(e.pointerId);
+      if (touches.size < 2) pinchBase = null;
+    };
+    this.registerDomEvent(this.contentEl, "pointerup", endTouch);
+    this.registerDomEvent(this.contentEl, "pointercancel", endTouch);
   }
 
   async onClose(): Promise<void> {
@@ -150,8 +215,10 @@ export class WayfinderView extends ItemView {
     if (this.plugin.lastError) {
       root.createDiv({ text: `Last sync failed: ${this.plugin.lastError}`, cls: "wf-error" });
     }
-    if (model.orphans.length > 0) this.renderOrphans(root, model.orphans);
-    for (const map of model.maps) this.renderMap(root, map);
+    const zoomWrap = root.createDiv({ cls: "wf-zoom" });
+    zoomWrap.style.setProperty("zoom", String(this.zoom));
+    if (model.orphans.length > 0) this.renderOrphans(zoomWrap, model.orphans);
+    for (const map of model.maps) this.renderMap(zoomWrap, map);
 
     root.scrollTop = scrollTop;
     // Edges need final geometry — draw after layout settles.
@@ -182,6 +249,25 @@ export class WayfinderView extends ItemView {
 
     const right = bar.createDiv({ cls: "wf-tally-right" });
     right.createSpan({ cls: "wf-sync-status", text: this.syncStatusText() });
+    const zoomOut = right.createEl("button", {
+      cls: "wf-refresh",
+      attr: { "aria-label": "Zoom out" },
+    });
+    setIcon(zoomOut, "zoom-out");
+    zoomOut.addEventListener("click", () => this.setZoom(this.zoom / 1.15));
+    const zoomLabel = right.createEl("button", {
+      cls: "wf-refresh wf-zoom-label",
+      text: `${Math.round(this.zoom * 100)}%`,
+      attr: { "aria-label": "Reset zoom" },
+    });
+    zoomLabel.addEventListener("click", () => this.setZoom(1));
+    const zoomIn = right.createEl("button", {
+      cls: "wf-refresh",
+      attr: { "aria-label": "Zoom in" },
+    });
+    setIcon(zoomIn, "zoom-in");
+    zoomIn.addEventListener("click", () => this.setZoom(this.zoom * 1.15));
+
     const modeBtn = right.createEl("button", {
       cls: "wf-refresh",
       attr: { "aria-label": this.mode === "tree" ? "Switch to list view" : "Switch to tree view" },
