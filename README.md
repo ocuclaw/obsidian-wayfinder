@@ -4,7 +4,7 @@ Visualizes wayfinder maps from a GitHub repo's issues inside Obsidian: each `way
 
 The wayfinder skill and methodology this plugin visualizes — maps, tickets, frontier, AFK/HITL delegation — come from [Matt Pocock's skills repo](https://github.com/mattpocock/skills); this plugin just draws what that workflow puts in your issues. Plugin 1.x is aligned to the v1.1.0 skills release.
 
-![type colors follow GitHub's label hues]
+![The Wayfinder view: a map card with its tickets in a dependency-layered tree — resolved tickets dimmed, the takeable frontier ticket highlighted](docs/wayfinder-view.png)
 
 ## What it shows
 
