@@ -1,4 +1,4 @@
-import { ItemView, Notice, Platform, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, Platform, WorkspaceLeaf, setIcon } from "obsidian";
 import type { RawIssue } from "./model";
 import type WayfinderPlugin from "./main";
 import { TicketModal } from "./modal";
@@ -437,13 +437,17 @@ export class WayfinderView extends ItemView {
       {
         label: "Claimed",
         tickets: map.tickets.filter(
-          (t) => t.issue.state === "open" && !t.frontier && t.openBlockers.length === 0,
+          (t) =>
+            t.issue.state === "open" &&
+            !t.frontier &&
+            !t.unverified &&
+            t.openBlockers.length === 0,
         ),
       },
       {
         label: "Blocked",
         tickets: map.tickets.filter(
-          (t) => t.issue.state === "open" && t.openBlockers.length > 0,
+          (t) => t.issue.state === "open" && (t.openBlockers.length > 0 || t.unverified),
         ),
       },
       { label: "Resolved", tickets: map.tickets.filter((t) => t.issue.state === "closed") },
@@ -462,7 +466,7 @@ export class WayfinderView extends ItemView {
    * Small always-available actions on a card: optional ⓘ details, ⧉ copy,
    * ↗ GitHub. When `claimCheck` is set (takeable tickets), copy/open first
    * verify against GitHub that the ticket wasn't claimed since the last sync;
-   * a warning notice replaces the action on first click, a repeat proceeds.
+   * a warning notice replaces the action when the live issue is no longer clear.
    */
   private addIconActions(
     card: HTMLElement,
@@ -485,11 +489,8 @@ export class WayfinderView extends ItemView {
 
     const guarded = async (action: () => void): Promise<void> => {
       if (claimCheck) {
-        const warning = await this.plugin.claimCheck(issue.number);
-        if (warning) {
-          new Notice(`⚠ ${warning}`, 6000);
-          return;
-        }
+        await this.plugin.guardedAction(issue.number, action);
+        return;
       }
       action();
     };
@@ -540,6 +541,8 @@ export class WayfinderView extends ItemView {
     const meta = card.createDiv({ cls: "wf-meta" });
     if (closed) {
       meta.setText("✓ resolved");
+    } else if (t.unverified) {
+      meta.setText("⚠ blockers unverified");
     } else if (blocked) {
       meta.setText(`🔒 blocked by ${t.openBlockers.map((n) => `#${n}`).join(" ")}`);
     } else if (t.issue.assignees.length > 0) {

@@ -59,15 +59,17 @@ export class GitHubClient {
     return toRawIssue(res.json as Record<string, unknown>);
   }
 
-  async blockedBy(issueNumber: number): Promise<number[]> {
+  async blockedBy(issueNumber: number): Promise<number[] | null> {
     const res = await this.get(`/issues/${issueNumber}/dependencies/blocked_by?per_page=100`);
-    if (res.status !== 200) return []; // dependencies API missing/empty — treat as unblocked
+    if (res.status === 404) return [];
+    if (res.status !== 200) return null;
     return (res.json as { number: number }[]).map((i) => i.number);
   }
 
-  async subIssues(issueNumber: number): Promise<number[]> {
+  async subIssues(issueNumber: number): Promise<number[] | null> {
     const res = await this.get(`/issues/${issueNumber}/sub_issues?per_page=100`);
-    if (res.status !== 200) return [];
+    if (res.status === 404) return [];
+    if (res.status !== 200) return null;
     return (res.json as { number: number }[]).map((i) => i.number);
   }
 
@@ -122,7 +124,14 @@ export async function fetchSnapshot(
   const parents: Record<string, number> = {};
   const maps = issues.filter((i) => wayfinderType(i.labels) === "map");
   for (const map of maps) {
-    for (const child of await gh.subIssues(map.number)) {
+    const children = await gh.subIssues(map.number);
+    if (children === null) {
+      for (const [child, parent] of Object.entries(prev?.parents ?? {})) {
+        if (parent === map.number) parents[child] = parent;
+      }
+      continue;
+    }
+    for (const child of children) {
       parents[String(child)] = map.number;
     }
   }
@@ -141,10 +150,12 @@ export async function fetchSnapshot(
   const queue = [...stale];
   const workers = Array.from({ length: 10 }, async () => {
     for (let issue = queue.shift(); issue; issue = queue.shift()) {
-      deps[String(issue.number)] = {
-        updatedAt: issue.updated_at,
-        blockedBy: await gh.blockedBy(issue.number),
-      };
+      const key = String(issue.number);
+      const blockedBy = await gh.blockedBy(issue.number);
+      deps[key] =
+        blockedBy === null
+          ? (prev?.deps[key] ?? { updatedAt: "", blockedBy: [], unverified: true })
+          : { updatedAt: issue.updated_at, blockedBy };
     }
   });
   await Promise.all(workers);

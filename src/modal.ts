@@ -38,9 +38,19 @@ export class TicketModal extends Modal {
 
     const actions = contentEl.createDiv({ cls: "wf-modal-actions" });
     const copyBtn = actions.createEl("button", { text: "Copy /wayfinder command", cls: "mod-cta" });
-    copyBtn.addEventListener("click", () => this.plugin.copyCommand(issue.html_url));
+    copyBtn.addEventListener("click", () => {
+      const action = (): void => this.plugin.copyCommand(issue.html_url);
+      if (this.ticket?.frontier) void this.plugin.guardedAction(issue.number, action);
+      else action();
+    });
     const ghBtn = actions.createEl("button", { text: "Open on GitHub ↗" });
-    ghBtn.addEventListener("click", () => window.open(issue.html_url, "_blank"));
+    ghBtn.addEventListener("click", () => {
+      const action = (): void => {
+        window.open(issue.html_url, "_blank");
+      };
+      if (this.ticket?.frontier) void this.plugin.guardedAction(issue.number, action);
+      else action();
+    });
 
     const map = this.map;
     if (!this.ticket && map) {

@@ -29,6 +29,7 @@ export interface RawIssue {
 export interface DepEntry {
   updatedAt: string;
   blockedBy: number[];
+  unverified?: true;
 }
 
 export interface Snapshot {
@@ -46,6 +47,7 @@ export interface Ticket {
   parent: number | null;
   blockedBy: number[];
   openBlockers: number[];
+  unverified: boolean;
   frontier: boolean;
   layer: number;
 }
@@ -115,8 +117,10 @@ export function buildModel(snap: Snapshot): Model {
   for (const issue of snap.issues) {
     const type = wayfinderType(issue.labels);
     if (!type || type === "map") continue;
-    const blockedBy = snap.deps[String(issue.number)]?.blockedBy ?? [];
+    const dep = snap.deps[String(issue.number)];
+    const blockedBy = dep?.blockedBy ?? [];
     const openBlockers = blockedBy.filter((n) => byNumber.get(n)?.state === "open");
+    const unverified = dep?.unverified === true;
     tickets.push({
       issue,
       type,
@@ -124,8 +128,12 @@ export function buildModel(snap: Snapshot): Model {
       parent: snap.parents?.[String(issue.number)] ?? parentOf(issue.body),
       blockedBy,
       openBlockers,
+      unverified,
       frontier:
-        issue.state === "open" && openBlockers.length === 0 && issue.assignees.length === 0,
+        !unverified &&
+        issue.state === "open" &&
+        openBlockers.length === 0 &&
+        issue.assignees.length === 0,
       layer: 0,
     });
   }

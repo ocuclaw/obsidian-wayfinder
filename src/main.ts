@@ -1,6 +1,6 @@
 import { Events, Notice, Plugin, WorkspaceLeaf, requestUrl } from "obsidian";
 import { GitHubClient, fetchSnapshot, type Http, type IssueComment } from "./github";
-import { buildModel, type Snapshot } from "./model";
+import { buildModel, type RawIssue, type Snapshot } from "./model";
 import { DEFAULT_SETTINGS, WayfinderSettingTab, type WayfinderSettings } from "./settings";
 import { VIEW_TYPE_WAYFINDER, WayfinderView } from "./view";
 
@@ -29,36 +29,43 @@ export default class WayfinderPlugin extends Plugin {
     return this.github.comments(issueNumber);
   }
 
-  /**
-   * Live-check an open, unclaimed ticket right before acting on it.
-   * Returns a warning string if it was claimed or resolved since the last
-   * sync (and patches the snapshot so the view updates), null when clear.
-   * Failures and slow responses (>2s) return null — never block the action.
-   */
-  async claimCheck(issueNumber: number): Promise<string | null> {
+  /** Live-check an open, unclaimed ticket right before acting on it. */
+  async guardedAction(issueNumber: number, action: () => void): Promise<void> {
     const snap = this.snapshot;
     const cached = snap?.issues.find((i) => i.number === issueNumber);
-    if (!snap || !cached || cached.state !== "open" || cached.assignees.length > 0) return null;
+    if (!snap || !cached || cached.state !== "open" || cached.assignees.length > 0) {
+      action();
+      return;
+    }
+    let fresh: RawIssue | null;
     try {
-      const fresh = await Promise.race([
+      fresh = await Promise.race([
         this.github.issue(issueNumber),
         new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 2000)),
       ]);
-      if (!fresh) return null;
-      let warning: string | null = null;
-      if (fresh.state === "closed") {
-        warning = `#${issueNumber} was resolved since the last sync`;
-      } else if (fresh.assignees.length > 0) {
-        warning = `#${issueNumber} was claimed by ${fresh.assignees.join(", ")} since the last sync`;
-      }
-      if (warning) {
-        snap.issues[snap.issues.indexOf(cached)] = fresh;
-        this.events.trigger("wayfinder:updated");
-      }
-      return warning;
     } catch {
-      return null;
+      new Notice(`Couldn't verify #${issueNumber} is still takeable — proceeding`);
+      action();
+      return;
     }
+    if (!fresh) {
+      new Notice(`Couldn't verify #${issueNumber} is still takeable — proceeding`);
+      action();
+      return;
+    }
+    let warning: string | null = null;
+    if (fresh.state === "closed") {
+      warning = `#${issueNumber} was resolved since the last sync`;
+    } else if (fresh.assignees.length > 0) {
+      warning = `#${issueNumber} was claimed by ${fresh.assignees.join(", ")} since the last sync`;
+    }
+    if (warning) {
+      snap.issues[snap.issues.indexOf(cached)] = fresh;
+      this.events.trigger("wayfinder:updated");
+      new Notice(`⚠ ${warning}`, 6000);
+      return;
+    }
+    action();
   }
 
   /** Copy the /wayfinder command for the newest frontier ticket. */
@@ -68,14 +75,16 @@ export default class WayfinderPlugin extends Plugin {
       return;
     }
     const model = buildModel(this.snapshot);
-    for (const map of model.maps) {
-      const frontier = map.tickets.filter((t) => t.frontier);
-      if (frontier.length > 0) {
-        const pick = frontier[0];
+    const frontier = model.maps.flatMap((map) => map.tickets.filter((ticket) => ticket.frontier));
+    if (frontier.length > 0) {
+      const pick = frontier.reduce((newest, ticket) =>
+        ticket.issue.number > newest.issue.number ? ticket : newest,
+      );
+      void this.guardedAction(pick.issue.number, () => {
         this.copyCommand(pick.issue.html_url);
         new Notice(`Next takeable: #${pick.issue.number} ${pick.issue.title}`);
-        return;
-      }
+      });
+      return;
     }
     new Notice("Wayfinder: no takeable tickets right now.");
   }

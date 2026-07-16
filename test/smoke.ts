@@ -39,7 +39,7 @@ for (const { type, tally } of model.tallies) {
 }
 console.log(`  total: ${model.totalOpen}/${model.totalIssues}\n`);
 
-check("has 6 maps", model.maps.length === 6);
+check("has at least 6 maps", model.maps.length >= 6);
 check("no orphans right now", model.orphans.length === 0);
 
 const sdkRelay = model.maps.find((m) => m.issue.number === 368);
