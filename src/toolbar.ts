@@ -1,7 +1,11 @@
 import { Menu, Platform, setIcon } from "obsidian";
 import type { Model } from "./model";
+import type { ViewMode } from "./view-state";
 
-export type ViewMode = "tree" | "list";
+export interface MapChoice {
+  key: string;
+  label: string;
+}
 
 export interface ToolbarControls {
   syncStatusText: string;
@@ -9,12 +13,19 @@ export interface ToolbarControls {
   mode: ViewMode;
   zoom: number;
   anyExpanded: boolean;
+  mapChoices: MapChoice[];
+  selectedMapKey: string | null;
+  showCompletedMaps: boolean;
+  incompleteTicketsOnly: boolean;
   repos: { repo: string; shown: boolean }[];
   toggleSelectionMode: () => void;
   toggleAllMaps: (anyExpanded: boolean) => void;
   setZoom: (zoom: number) => void;
   adjustZoom: (factor: number) => void;
-  toggleMode: () => void;
+  setMode: (mode: ViewMode) => void;
+  setSelectedMap: (key: string | null) => void;
+  setShowCompletedMaps: (show: boolean) => void;
+  setIncompleteTicketsOnly: (onlyIncomplete: boolean) => void;
   toggleRepo: (repo: string) => void;
   showAllRepos: () => void;
   refresh: () => void;
@@ -26,6 +37,7 @@ export function renderToolbar(
   controls: ToolbarControls,
 ): void {
   const bar = root.createDiv({ cls: "wf-tally" });
+  renderMapPicker(bar, controls);
   if (!Platform.isMobile) {
     for (const { type, tally } of model.tallies) {
       const stat = bar.createDiv({ cls: `wf-stat wf-t-${type}` });
@@ -82,6 +94,21 @@ export function renderToolbar(
   }
 }
 
+function renderMapPicker(bar: HTMLElement, controls: ToolbarControls): void {
+  const select = bar.createEl("select", {
+    cls: "wf-map-picker",
+    attr: { "aria-label": "Choose a Wayfinder map" },
+  });
+  select.disabled = controls.mapChoices.length === 0;
+  const all = select.createEl("option", { text: "All maps", value: "" });
+  all.selected = controls.selectedMapKey === null;
+  for (const choice of controls.mapChoices) {
+    const option = select.createEl("option", { text: choice.label, value: choice.key });
+    option.selected = choice.key === controls.selectedMapKey;
+  }
+  select.addEventListener("change", () => controls.setSelectedMap(select.value || null));
+}
+
 function renderRepoFilter(right: HTMLElement, controls: ToolbarControls): void {
   const shown = controls.repos.filter((config) => config.shown).length;
   const filter = right.createEl("button", {
@@ -109,6 +136,32 @@ function renderRepoFilter(right: HTMLElement, controls: ToolbarControls): void {
 }
 
 function renderDesktopControls(right: HTMLElement, controls: ToolbarControls): void {
+  const completedBtn = right.createEl("button", {
+    cls: `wf-refresh wf-filter-toggle${controls.showCompletedMaps ? " is-active" : ""}`,
+    text: "Completed maps",
+    attr: {
+      "aria-label": controls.showCompletedMaps ? "Hide completed maps" : "Show completed maps",
+      "aria-pressed": String(controls.showCompletedMaps),
+    },
+  });
+  completedBtn.addEventListener("click", () =>
+    controls.setShowCompletedMaps(!controls.showCompletedMaps),
+  );
+
+  const incompleteBtn = right.createEl("button", {
+    cls: `wf-refresh wf-filter-toggle${controls.incompleteTicketsOnly ? " is-active" : ""}`,
+    text: "Incomplete tickets",
+    attr: {
+      "aria-label": controls.incompleteTicketsOnly
+        ? "Show all tickets"
+        : "Show only incomplete tickets",
+      "aria-pressed": String(controls.incompleteTicketsOnly),
+    },
+  });
+  incompleteBtn.addEventListener("click", () =>
+    controls.setIncompleteTicketsOnly(!controls.incompleteTicketsOnly),
+  );
+
   const selectBtn = right.createEl("button", {
     cls: `wf-refresh wf-select-toggle${controls.selectionMode ? " is-active" : ""}`,
     attr: {
@@ -147,13 +200,41 @@ function renderDesktopControls(right: HTMLElement, controls: ToolbarControls): v
   zoomIn.addEventListener("click", () => controls.adjustZoom(1.15));
 
   const modeBtn = right.createEl("button", {
-    cls: "wf-refresh",
+    cls: "wf-refresh wf-mode-picker",
     attr: {
-      "aria-label": controls.mode === "tree" ? "Switch to list view" : "Switch to tree view",
+      "aria-label": "Choose view mode",
+      "aria-haspopup": "menu",
     },
   });
-  setIcon(modeBtn, controls.mode === "tree" ? "list" : "git-fork");
-  modeBtn.addEventListener("click", controls.toggleMode);
+  setIcon(modeBtn, modeIcon(controls.mode));
+  modeBtn.createSpan({ text: modeLabel(controls.mode) });
+  modeBtn.addEventListener("click", (event: MouseEvent) => showModeMenu(event, controls));
+}
+
+function showModeMenu(event: MouseEvent, controls: ToolbarControls): void {
+  const menu = new Menu();
+  for (const mode of ["tree", "list", "hybrid"] as const) {
+    menu.addItem((item) =>
+      item
+        .setTitle(modeLabel(mode))
+        .setIcon(modeIcon(mode))
+        .setChecked(controls.mode === mode)
+        .onClick(() => controls.setMode(mode)),
+    );
+  }
+  menu.showAtMouseEvent(event);
+}
+
+function modeLabel(mode: ViewMode): string {
+  if (mode === "tree") return "Dependency tree";
+  if (mode === "list") return "Actionability list";
+  return "Hybrid";
+}
+
+function modeIcon(mode: ViewMode): string {
+  if (mode === "tree") return "git-fork";
+  if (mode === "list") return "list";
+  return "columns-2";
 }
 
 function showMobileMenu(event: MouseEvent, model: Model, controls: ToolbarControls): void {
@@ -165,12 +246,29 @@ function showMobileMenu(event: MouseEvent, model: Model, controls: ToolbarContro
       .onClick(controls.toggleSelectionMode),
   );
   menu.addSeparator();
+  for (const mode of ["tree", "list", "hybrid"] as const) {
+    menu.addItem((item) =>
+      item
+        .setTitle(modeLabel(mode))
+        .setIcon(modeIcon(mode))
+        .setChecked(controls.mode === mode)
+        .onClick(() => controls.setMode(mode)),
+    );
+  }
+  menu.addSeparator();
   menu.addItem((item) =>
     item
-      .setTitle(controls.mode === "tree" ? "Switch to list view" : "Switch to tree view")
-      .setIcon(controls.mode === "tree" ? "list" : "git-fork")
-      .onClick(controls.toggleMode),
+      .setTitle("Show completed maps")
+      .setChecked(controls.showCompletedMaps)
+      .onClick(() => controls.setShowCompletedMaps(!controls.showCompletedMaps)),
   );
+  menu.addItem((item) =>
+    item
+      .setTitle("Show only incomplete tickets")
+      .setChecked(controls.incompleteTicketsOnly)
+      .onClick(() => controls.setIncompleteTicketsOnly(!controls.incompleteTicketsOnly)),
+  );
+  menu.addSeparator();
   menu.addItem((item) =>
     item
       .setTitle(controls.anyExpanded ? "Collapse all maps" : "Expand all maps")

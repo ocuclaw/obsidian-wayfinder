@@ -48,6 +48,15 @@ body.theme-light .wayfinder-view {
   border-bottom: 1px solid var(--background-modifier-border);
   margin-bottom: 1rem;
 }
+.wf-map-picker {
+  min-width: 11rem; max-width: min(22rem, 45vw); height: 2rem;
+  color: var(--text-normal); background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border); border-radius: 5px;
+  padding: 0 1.8rem 0 0.5rem; cursor: pointer;
+}
+.wf-map-picker:focus-visible, .wf-refresh:focus-visible {
+  outline: 2px solid var(--interactive-accent); outline-offset: 1px;
+}
 .wf-stat {
   display: inline-flex; align-items: baseline; gap: 0.35rem;
   background: var(--background-secondary);
@@ -70,7 +79,8 @@ body.theme-light .wayfinder-view {
 .wf-refresh svg { width: 15px; height: 15px; }
 .wf-repo-filter { gap: 0.3rem; }
 .wf-select-toggle { gap: 0.3rem; }
-.wf-select-toggle.is-active {
+.wf-filter-toggle, .wf-mode-picker { gap: 0.3rem; white-space: nowrap; }
+.wf-select-toggle.is-active, .wf-filter-toggle.is-active {
   color: var(--text-on-accent); background: var(--interactive-accent);
   border-color: var(--interactive-accent);
 }
@@ -199,6 +209,28 @@ body.theme-light .wayfinder-view {
 .wf-ticket-row { width: 100%; }
 .wf-ticket-row .wf-ticket-title { font-size: 0.85em; }
 .wf-ticket-row .wf-actions { bottom: auto; top: 0.35rem; }
+
+/* ── hybrid mode ── */
+.wf-hybrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr));
+  gap: 1rem; padding-top: 0.8rem;
+}
+.wf-hybrid-pane {
+  min-width: 0; padding: 0.2rem 0.65rem 0.65rem;
+  border: 1px solid var(--background-modifier-border); border-radius: 7px;
+  background: var(--background-primary-alt, var(--background-primary));
+}
+.wf-pane-heading {
+  padding: 0.35rem 0 0.15rem;
+  color: var(--text-muted); font-size: 0.68em; font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase;
+}
+
+@media (max-width: 700px) {
+  .wf-map-picker { flex: 1 1 11rem; max-width: 100%; }
+  .wf-tally-right { margin-left: 0; }
+}
 
 /* ── modal ── */
 .wf-modal .wf-modal-title { font-weight: 700; font-size: 1.05em; margin-top: 0.3rem; }

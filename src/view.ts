@@ -14,14 +14,18 @@ import {
   type RawIssue,
   type Ticket,
 } from "./model";
-import { renderToolbar, type ToolbarControls, type ViewMode } from "./toolbar";
+import { renderToolbar, type MapChoice, type ToolbarControls } from "./toolbar";
 import { drawAllEdges, renderTree } from "./tree";
+import { parseViewMode, projectView, type ViewMode } from "./view-state";
 
 export const VIEW_TYPE_WAYFINDER = "wayfinder-maps-view";
 
 const MODE_KEY = "wayfinder-view-mode";
 const ZOOM_KEY = "wayfinder-zoom";
 const HIDDEN_REPOS_KEY = "wayfinder-hidden-repos";
+const SELECTED_MAP_KEY = "wayfinder-selected-map";
+const SHOW_COMPLETED_MAPS_KEY = "wayfinder-show-completed-maps";
+const INCOMPLETE_TICKETS_ONLY_KEY = "wayfinder-incomplete-tickets-only";
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2;
 
@@ -34,13 +38,24 @@ export class WayfinderView extends ItemView {
 
   /** Per-device (localStorage, not synced): phones default to list, desktops to tree. */
   private get mode(): ViewMode {
-    const stored = window.localStorage.getItem(MODE_KEY);
-    if (stored === "tree" || stored === "list") return stored;
-    return Platform.isMobile ? "list" : "tree";
+    return parseViewMode(window.localStorage.getItem(MODE_KEY)) ??
+      (Platform.isMobile ? "list" : "tree");
   }
 
   private set mode(m: ViewMode) {
     window.localStorage.setItem(MODE_KEY, m);
+  }
+
+  private get selectedMapKey(): string | null {
+    return window.localStorage.getItem(SELECTED_MAP_KEY) || null;
+  }
+
+  private get showCompletedMaps(): boolean {
+    return storedBoolean(SHOW_COMPLETED_MAPS_KEY, true);
+  }
+
+  private get incompleteTicketsOnly(): boolean {
+    return storedBoolean(INCOMPLETE_TICKETS_ONLY_KEY, false);
   }
 
   /** Per-device zoom factor for the map area (CSS zoom, so layout reflows). */
@@ -359,22 +374,50 @@ export class WayfinderView extends ItemView {
     }
 
     const model = this.shownModel();
-    this.pruneSelection(model);
-    const anyExpanded = model.maps.some(
+    const requestedMapKey = this.selectedMapKey;
+    const projection = projectView(model, {
+      selectedMapKey: requestedMapKey,
+      showCompletedMaps: this.showCompletedMaps,
+      incompleteTicketsOnly: this.incompleteTicketsOnly,
+    });
+    if (requestedMapKey !== null && projection.selectedMapKey === null) {
+      window.localStorage.removeItem(SELECTED_MAP_KEY);
+    }
+    const visibleModel = projection.model;
+    if (
+      projection.selectedMapKey !== null &&
+      !this.collapsedOverride.has(projection.selectedMapKey)
+    ) {
+      this.collapsedOverride.set(projection.selectedMapKey, false);
+    }
+    this.pruneSelection(visibleModel);
+    const anyExpanded = visibleModel.maps.some(
       (map) =>
         !(this.collapsedOverride.get(issueKey(map.repo, map.issue.number)) ??
           map.issue.state === "closed"),
     );
-    renderToolbar(root, model, this.toolbarControls(model, anyExpanded));
+    renderToolbar(
+      root,
+      model,
+      this.toolbarControls(model, visibleModel, projection.selectedMapKey, anyExpanded),
+    );
     if (this.plugin.configError) {
       root.createDiv({ text: this.plugin.configError, cls: "wf-error" });
     }
     for (const error of this.errorLines()) root.createDiv({ text: error, cls: "wf-error" });
     const zoomWrap = root.createDiv({ cls: "wf-zoom" });
     zoomWrap.setCssStyles({ zoom: String(this.zoom) });
-    if (model.orphans.length > 0) this.renderOrphans(zoomWrap, model.orphans);
-    for (const map of model.maps) this.renderMap(zoomWrap, map);
-    if (this.selectionMode) this.renderSelectBar(root, model);
+    if (visibleModel.orphans.length > 0) this.renderOrphans(zoomWrap, visibleModel.orphans);
+    for (const map of visibleModel.maps) this.renderMap(zoomWrap, map);
+    if (visibleModel.maps.length === 0) {
+      zoomWrap.createDiv({
+        cls: "wf-empty",
+        text: this.showCompletedMaps
+          ? "No maps found."
+          : "No active maps. Show completed maps to view completed work.",
+      });
+    }
+    if (this.selectionMode) this.renderSelectBar(root, visibleModel);
 
     root.scrollTop = scrollTop;
     for (const scroller of Array.from(root.querySelectorAll<HTMLElement>(".wf-tree-scroll"))) {
@@ -406,7 +449,12 @@ export class WayfinderView extends ItemView {
     this.render();
   }
 
-  private toolbarControls(model: Model, anyExpanded = false): ToolbarControls {
+  private toolbarControls(
+    model: Model,
+    visibleModel = model,
+    selectedMapKey: string | null = null,
+    anyExpanded = false,
+  ): ToolbarControls {
     const shown = new Set(this.shownRepos);
     return {
       syncStatusText: this.syncStatusText(model, shown.size),
@@ -414,16 +462,37 @@ export class WayfinderView extends ItemView {
       mode: this.mode,
       zoom: this.zoom,
       anyExpanded,
+      mapChoices: this.mapChoices(model),
+      selectedMapKey,
+      showCompletedMaps: this.showCompletedMaps,
+      incompleteTicketsOnly: this.incompleteTicketsOnly,
       repos: this.configuredRepos.map((repo) => ({ repo, shown: shown.has(repo) })),
       toggleSelectionMode: () => this.toggleSelectionMode(),
-      toggleAllMaps: (expanded: boolean) => this.toggleAllMaps(model, expanded),
+      toggleAllMaps: (expanded: boolean) => this.toggleAllMaps(visibleModel, expanded),
       setZoom: (zoom: number) => this.setZoom(zoom),
       adjustZoom: (factor: number) => this.setZoom(this.zoom * factor),
-      toggleMode: () => this.toggleMode(),
+      setMode: (mode: ViewMode) => this.setViewMode(mode),
+      setSelectedMap: (key: string | null) => this.setSelectedMap(key),
+      setShowCompletedMaps: (show: boolean) => this.setShowCompletedMaps(show),
+      setIncompleteTicketsOnly: (onlyIncomplete: boolean) =>
+        this.setIncompleteTicketsOnly(onlyIncomplete),
       toggleRepo: (repo: string) => this.toggleRepo(repo),
       showAllRepos: () => this.showAllRepos(),
       refresh: () => void this.plugin.sync(true),
     };
+  }
+
+  private mapChoices(model: Model): MapChoice[] {
+    const eligible = this.showCompletedMaps
+      ? model.maps
+      : model.maps.filter((map) => map.issue.state === "open");
+    const multipleRepos = new Set(model.maps.map((map) => map.repo)).size > 1;
+    return eligible.map((map) => ({
+      key: issueKey(map.repo, map.issue.number),
+      label: `${multipleRepos ? `${map.repo} · ` : ""}#${map.issue.number} ${map.issue.title}${
+        map.issue.state === "closed" ? " (completed)" : ""
+      }`,
+    }));
   }
 
   private errorLines(): string[] {
@@ -434,8 +503,28 @@ export class WayfinderView extends ItemView {
     });
   }
 
-  private toggleMode(): void {
-    this.mode = this.mode === "tree" ? "list" : "tree";
+  private setViewMode(mode: ViewMode): void {
+    this.mode = mode;
+    this.render();
+  }
+
+  private setSelectedMap(key: string | null): void {
+    if (key) {
+      window.localStorage.setItem(SELECTED_MAP_KEY, key);
+      this.collapsedOverride.set(key, false);
+    } else {
+      window.localStorage.removeItem(SELECTED_MAP_KEY);
+    }
+    this.render();
+  }
+
+  private setShowCompletedMaps(show: boolean): void {
+    window.localStorage.setItem(SHOW_COMPLETED_MAPS_KEY, String(show));
+    this.render();
+  }
+
+  private setIncompleteTicketsOnly(onlyIncomplete: boolean): void {
+    window.localStorage.setItem(INCOMPLETE_TICKETS_ONLY_KEY, String(onlyIncomplete));
     this.render();
   }
 
@@ -663,7 +752,13 @@ export class WayfinderView extends ItemView {
 
     if (!expanded) return;
     if (map.tickets.length === 0) {
-      section.createDiv({ cls: "wf-no-tickets", text: "No tickets attached yet." });
+      section.createDiv({
+        cls: "wf-no-tickets",
+        text:
+          this.incompleteTicketsOnly && map.total > 0
+            ? "No incomplete tickets."
+            : "No tickets attached yet.",
+      });
       return;
     }
 
@@ -672,8 +767,20 @@ export class WayfinderView extends ItemView {
       return;
     }
 
-    const tree = renderTree(section, map, this.ticketCardOptions());
+    if (this.mode === "tree") {
+      const tree = renderTree(section, map, this.ticketCardOptions());
+      this.resizeObserver?.observe(tree);
+      return;
+    }
+
+    const hybrid = section.createDiv({ cls: "wf-hybrid" });
+    const dependencies = hybrid.createDiv({ cls: "wf-hybrid-pane" });
+    dependencies.createDiv({ cls: "wf-pane-heading", text: "Dependencies" });
+    const tree = renderTree(dependencies, map, this.ticketCardOptions());
     this.resizeObserver?.observe(tree);
+    const actionability = hybrid.createDiv({ cls: "wf-hybrid-pane" });
+    actionability.createDiv({ cls: "wf-pane-heading", text: "Actionability" });
+    renderList(actionability, map, this.ticketCardOptions());
   }
 
   private ticketCardOptions(): Omit<TicketCardOptions, "asRow"> {
@@ -689,4 +796,11 @@ export class WayfinderView extends ItemView {
     };
   }
 
+}
+
+function storedBoolean(key: string, fallback: boolean): boolean {
+  const value = window.localStorage.getItem(key);
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
 }

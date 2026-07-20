@@ -8,14 +8,14 @@ The wayfinder skill and methodology this plugin visualizes — maps, tickets, fr
 
 ## What it shows
 
-- **Global tally bar** — open/total chips per `wayfinder:*` type, plus takeable, need-you, agent-ready, and either delegation chips, last-sync time, refresh, view-mode, fold, and zoom controls.
-- **Maps stacked** — open maps expanded (newest first), completed maps collapsed with a final progress bar. Click/tap a map header to expand or collapse it; ⓘ opens its details.
-- **Tree + list modes** — dependency-layered trees draw the actual blocker routes; compact lists group tickets by actionability. List is the mobile default, and the choice is stored per device.
+- **Global tally bar** — open/total chips per `wayfinder:*` type, plus takeable, need-you, agent-ready, and either delegation chips, last-sync time, refresh, view-mode, fold, and zoom controls. Tallies always cover the shown repositories, independent of map focus and display filters.
+- **Map navigation + filters** — choose All maps or one repository-qualified map, include or hide completed maps, and optionally show only incomplete tickets. Open maps are expanded newest first; completed maps are collapsed with a final progress bar. Click/tap a map header to expand or collapse it; ⓘ opens its details.
+- **Tree, list + hybrid modes** — dependency-layered trees draw the actual blocker routes; compact lists group tickets by actionability; hybrid combines both views side by side in wide panes and stacks them in narrow panes. List is the mobile default.
 - **Ticket state** — the **frontier** (open + verified unblocked + unassigned) glows with a FRONTIER flag; blocked tickets are dashed with a 🔒 naming open blockers; resolved tickets are dimmed with strikethrough.
 - **Type + mode badges** — the `wayfinder:*` label colors each card; AFK/HITL is derived per the wayfinder skill (research→AFK, prototype/grilling→HITL, task→`ready-for-agent`/`ready-for-human` labels, else "either").
 - **Orphan warnings** — `wayfinder:*` tickets whose "Part of #N" parent is missing or isn't a map get flagged instead of silently vanishing.
 - **Ticket details + actions** — click/tap a ticket for a modal with its rendered Markdown description, linked blockers, assignee, live-fetched comments, and Copy `/wayfinder` / Open-on-GitHub buttons. The ⧉ on every card copies immediately; on takeable tickets it first checks for a new claim or resolution and replaces the action with a warning when necessary. ↗ opens GitHub.
-- **Per-device zoom** — use the toolbar, Ctrl/Cmd+wheel, or pinch; the zoom level is stored locally per device.
+- **Per-device view state** — map focus, display filters, view mode, and zoom are stored locally on each device. Use the toolbar, Ctrl/Cmd+wheel, or pinch to adjust zoom.
 
 ## Setup
 

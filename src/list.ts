@@ -1,5 +1,6 @@
 import { renderTicketCard, type TicketCardOptions } from "./cards";
-import type { MapTree, Ticket } from "./model";
+import type { MapTree } from "./model";
+import { groupTicketsByActionability } from "./view-state";
 
 /** Compact mode: full-width rows grouped by actionability. */
 export function renderList(
@@ -7,28 +8,7 @@ export function renderList(
   map: MapTree,
   cardOptions: Omit<TicketCardOptions, "asRow">,
 ): void {
-  const groups: { label: string; tickets: Ticket[] }[] = [
-    { label: "Takeable", tickets: map.tickets.filter((ticket) => ticket.frontier) },
-    {
-      label: "Claimed",
-      tickets: map.tickets.filter(
-        (ticket) =>
-          ticket.issue.state === "open" &&
-          !ticket.frontier &&
-          !ticket.unverified &&
-          ticket.openBlockers.length === 0,
-      ),
-    },
-    {
-      label: "Blocked",
-      tickets: map.tickets.filter(
-        (ticket) =>
-          ticket.issue.state === "open" &&
-          (ticket.openBlockers.length > 0 || ticket.unverified),
-      ),
-    },
-    { label: "Resolved", tickets: map.tickets.filter((ticket) => ticket.issue.state === "closed") },
-  ];
+  const groups = groupTicketsByActionability(map.tickets);
   const list = section.createDiv({ cls: "wf-list" });
   for (const group of groups) {
     if (group.tickets.length === 0) continue;
